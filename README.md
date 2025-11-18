@@ -1,2 +1,2 @@
-# Lindner-Dryer
-Werkstudent Project
+# dryer-kpi-dashboard
+Trial
