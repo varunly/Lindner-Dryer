@@ -253,6 +253,23 @@ def run_analysis(energy_path, wagon_path, products_filter, month_filter):
         status_text.empty()
 
 # ------------------ Main Processing ------------------
+
+# Initialize session state for results
+if 'results' not in st.session_state:
+    st.session_state.results = None
+if 'analysis_complete' not in st.session_state:
+    st.session_state.analysis_complete = False
+
+# Clear results if files are changed
+if energy_file and wagon_file:
+    current_files = (energy_file.name, wagon_file.name)
+    if 'last_files' not in st.session_state:
+        st.session_state.last_files = current_files
+    elif st.session_state.last_files != current_files:
+        st.session_state.results = None
+        st.session_state.analysis_complete = False
+        st.session_state.last_files = current_files
+
 if run_button:
     if not energy_file or not wagon_file:
         st.error("⚠️ Please upload both files before running analysis.")
@@ -278,134 +295,16 @@ if run_button:
                 month if month != 0 else None
             )
             
-            summary = results['summary']
-            yearly = results['yearly']
-            
-            # Check if we have data
-            if summary.empty:
-                st.warning("⚠️ No data found matching the selected filters.")
-                st.stop()
-            
-            # --------------- KPI Cards ---------------
-            st.markdown('<div class="section-header">📈 Summary KPIs</div>', 
-                       unsafe_allow_html=True)
-            
-            total_energy = yearly["Energy_kWh"].sum()
-            avg_kpi = yearly["kWh_per_m3"].mean()
-            total_volume = yearly["Volume_m3"].sum()
-            
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.markdown(
-                    create_kpi_card("Total Energy", total_energy, "kWh"),
-                    unsafe_allow_html=True
-                )
-            with col2:
-                st.markdown(
-                    create_kpi_card("Avg. Efficiency", avg_kpi, "kWh/m³"),
-                    unsafe_allow_html=True
-                )
-            with col3:
-                st.markdown(
-                    create_kpi_card("Total Volume", total_volume, "m³"),
-                    unsafe_allow_html=True
-                )
-            
-            # --------------- Monthly Trend ---------------
-            st.markdown('<div class="section-header">📊 Monthly KPI Trend</div>', 
-                       unsafe_allow_html=True)
-            
-            fig1 = px.line(
-                summary,
-                x="Month",
-                y="kWh_per_m3",
-                color="Zone",
-                markers=True,
-                hover_data=["Produkt", "Energy_kWh", "Volume_m3"],
-                title="Energy Efficiency by Month and Zone"
-            )
-            fig1.update_layout(
-                height=500,
-                xaxis_title="Month",
-                yaxis_title="kWh/m³",
-                plot_bgcolor="white",
-                hovermode='x unified'
-            )
-            st.plotly_chart(fig1, use_container_width=True)
-            
-            # --------------- Zone Comparison ---------------
-            st.markdown('<div class="section-header">📉 Zone Comparison</div>', 
-                       unsafe_allow_html=True)
-            
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                fig2 = px.bar(
-                    yearly,
-                    x="Zone",
-                    y="kWh_per_m3",
-                    color="Produkt",
-                    text_auto=".2f",
-                    title="Yearly KPI by Zone"
-                )
-                fig2.update_layout(height=400, plot_bgcolor="white")
-                st.plotly_chart(fig2, use_container_width=True)
-            
-            with col2:
-                fig3 = px.pie(
-                    yearly,
-                    values="Energy_kWh",
-                    names="Zone",
-                    title="Energy Distribution by Zone"
-                )
-                fig3.update_layout(height=400)
-                st.plotly_chart(fig3, use_container_width=True)
-            
-            # --------------- Data Tables ---------------
-            with st.expander("📋 View Detailed Data Tables"):
-                tab1, tab2 = st.tabs(["Monthly Summary", "Yearly Summary"])
-                
-                with tab1:
-                    st.dataframe(
-                        summary.style.format({
-                            "Energy_kWh": "{:.2f}",
-                            "Volume_m3": "{:.2f}",
-                            "kWh_per_m3": "{:.2f}"
-                        }),
-                        use_container_width=True
-                    )
-                
-                with tab2:
-                    st.dataframe(
-                        yearly.style.format({
-                            "Energy_kWh": "{:.2f}",
-                            "Volume_m3": "{:.2f}",
-                            "kWh_per_m3": "{:.2f}"
-                        }),
-                        use_container_width=True
-                    )
-            
-            # --------------- Download Section ---------------
-            st.markdown('<div class="section-header">📥 Export Results</div>', 
-                       unsafe_allow_html=True)
-            
-            # Create Excel file in memory
-            excel_data = create_excel_download(results)
-            
-            st.download_button(
-                label="📥 Download Complete Excel Report",
-                data=excel_data,
-                file_name="Dryer_KPI_Analysis.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True
-            )
-            
-            st.success("✅ Analysis complete! Explore the visualizations above or download the full report.")
+            # Store results in session state
+            st.session_state.results = results
+            st.session_state.analysis_complete = True
             
         except Exception as e:
             st.error(f"❌ An error occurred during analysis: {str(e)}")
             with st.expander("🔍 View Error Details"):
                 st.exception(e)
+            st.session_state.results = None
+            st.session_state.analysis_complete = False
         
         finally:
             # Clean up temporary files
@@ -421,3 +320,128 @@ if run_button:
                 except:
                     pass
 
+# Display results if available
+if st.session_state.analysis_complete and st.session_state.results:
+    results = st.session_state.results
+    summary = results['summary']
+    yearly = results['yearly']
+    
+    # Check if we have data
+    if summary.empty:
+        st.warning("⚠️ No data found matching the selected filters.")
+    else:
+        # --------------- KPI Cards ---------------
+        st.markdown('<div class="section-header">📈 Summary KPIs</div>', 
+                   unsafe_allow_html=True)
+        
+        total_energy = yearly["Energy_kWh"].sum()
+        avg_kpi = yearly["kWh_per_m3"].mean()
+        total_volume = yearly["Volume_m3"].sum()
+        
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.markdown(
+                create_kpi_card("Total Energy", total_energy, "kWh"),
+                unsafe_allow_html=True
+            )
+        with col2:
+            st.markdown(
+                create_kpi_card("Avg. Efficiency", avg_kpi, "kWh/m³"),
+                unsafe_allow_html=True
+            )
+        with col3:
+            st.markdown(
+                create_kpi_card("Total Volume", total_volume, "m³"),
+                unsafe_allow_html=True
+            )
+        
+        # --------------- Monthly Trend ---------------
+        st.markdown('<div class="section-header">📊 Monthly KPI Trend</div>', 
+                   unsafe_allow_html=True)
+        
+        fig1 = px.line(
+            summary,
+            x="Month",
+            y="kWh_per_m3",
+            color="Zone",
+            markers=True,
+            hover_data=["Produkt", "Energy_kWh", "Volume_m3"],
+            title="Energy Efficiency by Month and Zone"
+        )
+        fig1.update_layout(
+            height=500,
+            xaxis_title="Month",
+            yaxis_title="kWh/m³",
+            plot_bgcolor="white",
+            hovermode='x unified'
+        )
+        st.plotly_chart(fig1, use_container_width=True)
+        
+        # --------------- Zone Comparison ---------------
+        st.markdown('<div class="section-header">📉 Zone Comparison</div>', 
+                   unsafe_allow_html=True)
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            fig2 = px.bar(
+                yearly,
+                x="Zone",
+                y="kWh_per_m3",
+                color="Produkt",
+                text_auto=".2f",
+                title="Yearly KPI by Zone"
+            )
+            fig2.update_layout(height=400, plot_bgcolor="white")
+            st.plotly_chart(fig2, use_container_width=True)
+        
+        with col2:
+            fig3 = px.pie(
+                yearly,
+                values="Energy_kWh",
+                names="Zone",
+                title="Energy Distribution by Zone"
+            )
+            fig3.update_layout(height=400)
+            st.plotly_chart(fig3, use_container_width=True)
+        
+        # --------------- Data Tables ---------------
+        with st.expander("📋 View Detailed Data Tables"):
+            tab1, tab2 = st.tabs(["Monthly Summary", "Yearly Summary"])
+            
+            with tab1:
+                st.dataframe(
+                    summary.style.format({
+                        "Energy_kWh": "{:.2f}",
+                        "Volume_m3": "{:.2f}",
+                        "kWh_per_m3": "{:.2f}"
+                    }),
+                    use_container_width=True
+                )
+            
+            with tab2:
+                st.dataframe(
+                    yearly.style.format({
+                        "Energy_kWh": "{:.2f}",
+                        "Volume_m3": "{:.2f}",
+                        "kWh_per_m3": "{:.2f}"
+                    }),
+                    use_container_width=True
+                )
+        
+        # --------------- Download Section ---------------
+        st.markdown('<div class="section-header">📥 Export Results</div>', 
+                   unsafe_allow_html=True)
+        
+        # Create Excel file in memory
+        excel_data = create_excel_download(results)
+        
+        st.download_button(
+            label="📥 Download Complete Excel Report",
+            data=excel_data,
+            file_name="Dryer_KPI_Analysis.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True
+        )
+        
+        st.success("✅ Analysis complete! Explore the visualizations above or download the full report.")
