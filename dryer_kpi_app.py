@@ -5,6 +5,8 @@ import plotly.express as px
 import plotly.graph_objects as go
 from pathlib import Path
 import sys
+import os
+from io import BytesIO
 
 # Import the KPI calculation module
 try:
@@ -132,6 +134,21 @@ def create_kpi_card(title, value, unit):
     </div>
     '''
 
+def create_excel_download(results):
+    """Create Excel file in memory for download"""
+    output = BytesIO()
+    
+    with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+        results['energy'].to_excel(writer, sheet_name="Energy_Data", index=False)
+        results['wagons'].to_excel(writer, sheet_name="Wagon_Data", index=False)
+        results['intervals'].to_excel(writer, sheet_name="Zone_Intervals", index=False)
+        results['allocation'].to_excel(writer, sheet_name="Energy_Allocation", index=False)
+        results['summary'].to_excel(writer, sheet_name="Monthly_Summary", index=False)
+        results['yearly'].to_excel(writer, sheet_name="Yearly_Summary", index=False)
+    
+    output.seek(0)
+    return output
+
 def run_analysis(energy_path, wagon_path, products_filter, month_filter):
     """Run the KPI analysis with progress tracking"""
     
@@ -145,6 +162,9 @@ def run_analysis(energy_path, wagon_path, products_filter, month_filter):
         e_raw = pd.read_excel(energy_path, sheet_name=CONFIG["energy_sheet"])
         e = parse_energy(e_raw)
         
+        if e.empty:
+            raise ValueError("Energy data is empty after parsing")
+        
         # Step 2: Parse wagon data
         status_text.text("🔄 Parsing wagon tracking data...")
         progress_bar.progress(40)
@@ -155,24 +175,39 @@ def run_analysis(energy_path, wagon_path, products_filter, month_filter):
         )
         w = parse_wagon(w_raw)
         
+        if w.empty:
+            raise ValueError("Wagon data is empty after parsing")
+        
         # Step 3: Apply filters
         status_text.text("🔄 Applying filters...")
         progress_bar.progress(60)
+        
         if products_filter:
             w = w[w["Produkt"].astype(str).isin(products_filter)]
+            if w.empty:
+                raise ValueError(f"No wagons found for products: {products_filter}")
+        
         if month_filter:
             e = e[e["Month"] == month_filter]
             w = w[w["Month"] == month_filter]
+            if e.empty or w.empty:
+                raise ValueError(f"No data found for month: {month_filter}")
         
         # Step 4: Process intervals
         status_text.text("🔄 Processing zone intervals...")
         progress_bar.progress(70)
         ivals = explode_intervals(w)
         
+        if ivals.empty:
+            raise ValueError("No valid zone intervals could be created")
+        
         # Step 5: Allocate energy
         status_text.text("🔄 Allocating energy to products...")
         progress_bar.progress(85)
         alloc = allocate_energy(e, ivals)
+        
+        if alloc.empty:
+            raise ValueError("Energy allocation produced no results")
         
         # Step 6: Create summaries
         status_text.text("🔄 Generating summaries...")
@@ -210,163 +245,178 @@ def run_analysis(energy_path, wagon_path, products_filter, month_filter):
         status_text.empty()
         progress_bar.empty()
         raise e
+    finally:
+        # Clear progress indicators after a short delay
+        import time
+        time.sleep(0.5)
+        progress_bar.empty()
+        status_text.empty()
 
 # ------------------ Main Processing ------------------
 if run_button:
     if not energy_file or not wagon_file:
         st.error("⚠️ Please upload both files before running analysis.")
     else:
+        tmp_e_path = None
+        tmp_w_path = None
+        
         try:
             # Create temporary files
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp_e, \
-                 tempfile.NamedTemporaryFile(delete=False, suffix=".xlsm") as tmp_w:
-                
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp_e:
                 tmp_e.write(energy_file.read())
+                tmp_e_path = tmp_e.name
+            
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsm") as tmp_w:
                 tmp_w.write(wagon_file.read())
-                tmp_e.flush()
-                tmp_w.flush()
-                
-                # Run analysis
-                results = run_analysis(
-                    tmp_e.name,
-                    tmp_w.name,
-                    products if products else None,
-                    month if month != 0 else None
+                tmp_w_path = tmp_w.name
+            
+            # Run analysis
+            results = run_analysis(
+                tmp_e_path,
+                tmp_w_path,
+                products if products else None,
+                month if month != 0 else None
+            )
+            
+            summary = results['summary']
+            yearly = results['yearly']
+            
+            # Check if we have data
+            if summary.empty:
+                st.warning("⚠️ No data found matching the selected filters.")
+                st.stop()
+            
+            # --------------- KPI Cards ---------------
+            st.markdown('<div class="section-header">📈 Summary KPIs</div>', 
+                       unsafe_allow_html=True)
+            
+            total_energy = yearly["Energy_kWh"].sum()
+            avg_kpi = yearly["kWh_per_m3"].mean()
+            total_volume = yearly["Volume_m3"].sum()
+            
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.markdown(
+                    create_kpi_card("Total Energy", total_energy, "kWh"),
+                    unsafe_allow_html=True
                 )
-                
-                summary = results['summary']
-                yearly = results['yearly']
-                
-                # Check if we have data
-                if summary.empty:
-                    st.warning("⚠️ No data found matching the selected filters.")
-                    st.stop()
-                
-                # --------------- KPI Cards ---------------
-                st.markdown('<div class="section-header">📈 Summary KPIs</div>', 
-                           unsafe_allow_html=True)
-                
-                total_energy = yearly["Energy_kWh"].sum()
-                avg_kpi = yearly["kWh_per_m3"].mean()
-                total_volume = yearly["Volume_m3"].sum()
-                
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.markdown(
-                        create_kpi_card("Total Energy", total_energy, "kWh"),
-                        unsafe_allow_html=True
-                    )
-                with col2:
-                    st.markdown(
-                        create_kpi_card("Avg. Efficiency", avg_kpi, "kWh/m³"),
-                        unsafe_allow_html=True
-                    )
-                with col3:
-                    st.markdown(
-                        create_kpi_card("Total Volume", total_volume, "m³"),
-                        unsafe_allow_html=True
-                    )
-                
-                # --------------- Monthly Trend ---------------
-                st.markdown('<div class="section-header">📊 Monthly KPI Trend</div>', 
-                           unsafe_allow_html=True)
-                
-                fig1 = px.line(
-                    summary,
-                    x="Month",
+            with col2:
+                st.markdown(
+                    create_kpi_card("Avg. Efficiency", avg_kpi, "kWh/m³"),
+                    unsafe_allow_html=True
+                )
+            with col3:
+                st.markdown(
+                    create_kpi_card("Total Volume", total_volume, "m³"),
+                    unsafe_allow_html=True
+                )
+            
+            # --------------- Monthly Trend ---------------
+            st.markdown('<div class="section-header">📊 Monthly KPI Trend</div>', 
+                       unsafe_allow_html=True)
+            
+            fig1 = px.line(
+                summary,
+                x="Month",
+                y="kWh_per_m3",
+                color="Zone",
+                markers=True,
+                hover_data=["Produkt", "Energy_kWh", "Volume_m3"],
+                title="Energy Efficiency by Month and Zone"
+            )
+            fig1.update_layout(
+                height=500,
+                xaxis_title="Month",
+                yaxis_title="kWh/m³",
+                plot_bgcolor="white",
+                hovermode='x unified'
+            )
+            st.plotly_chart(fig1, use_container_width=True)
+            
+            # --------------- Zone Comparison ---------------
+            st.markdown('<div class="section-header">📉 Zone Comparison</div>', 
+                       unsafe_allow_html=True)
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                fig2 = px.bar(
+                    yearly,
+                    x="Zone",
                     y="kWh_per_m3",
-                    color="Zone",
-                    markers=True,
-                    hover_data=["Produkt", "Energy_kWh", "Volume_m3"],
-                    title="Energy Efficiency by Month and Zone"
+                    color="Produkt",
+                    text_auto=".2f",
+                    title="Yearly KPI by Zone"
                 )
-                fig1.update_layout(
-                    height=500,
-                    xaxis_title="Month",
-                    yaxis_title="kWh/m³",
-                    plot_bgcolor="white",
-                    hovermode='x unified'
+                fig2.update_layout(height=400, plot_bgcolor="white")
+                st.plotly_chart(fig2, use_container_width=True)
+            
+            with col2:
+                fig3 = px.pie(
+                    yearly,
+                    values="Energy_kWh",
+                    names="Zone",
+                    title="Energy Distribution by Zone"
                 )
-                st.plotly_chart(fig1, use_container_width=True)
+                fig3.update_layout(height=400)
+                st.plotly_chart(fig3, use_container_width=True)
+            
+            # --------------- Data Tables ---------------
+            with st.expander("📋 View Detailed Data Tables"):
+                tab1, tab2 = st.tabs(["Monthly Summary", "Yearly Summary"])
                 
-                # --------------- Zone Comparison ---------------
-                st.markdown('<div class="section-header">📉 Zone Comparison</div>', 
-                           unsafe_allow_html=True)
-                
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    fig2 = px.bar(
-                        yearly,
-                        x="Zone",
-                        y="kWh_per_m3",
-                        color="Produkt",
-                        text_auto=".2f",
-                        title="Yearly KPI by Zone"
-                    )
-                    fig2.update_layout(height=400, plot_bgcolor="white")
-                    st.plotly_chart(fig2, use_container_width=True)
-                
-                with col2:
-                    fig3 = px.pie(
-                        yearly,
-                        values="Energy_kWh",
-                        names="Zone",
-                        title="Energy Distribution by Zone"
-                    )
-                    fig3.update_layout(height=400)
-                    st.plotly_chart(fig3, use_container_width=True)
-                
-                # --------------- Data Tables ---------------
-                with st.expander("📋 View Detailed Data Tables"):
-                    tab1, tab2 = st.tabs(["Monthly Summary", "Yearly Summary"])
-                    
-                    with tab1:
-                        st.dataframe(
-                            summary.style.format({
-                                "Energy_kWh": "{:.2f}",
-                                "Volume_m3": "{:.2f}",
-                                "kWh_per_m3": "{:.2f}"
-                            }),
-                            use_container_width=True
-                        )
-                    
-                    with tab2:
-                        st.dataframe(
-                            yearly.style.format({
-                                "Energy_kWh": "{:.2f}",
-                                "Volume_m3": "{:.2f}",
-                                "kWh_per_m3": "{:.2f}"
-                            }),
-                            use_container_width=True
-                        )
-                
-                # --------------- Download Section ---------------
-                st.markdown('<div class="section-header">📥 Export Results</div>', 
-                           unsafe_allow_html=True)
-                
-                # Create Excel file in memory
-                output_path = "Dryer_KPI_Results.xlsx"
-                with pd.ExcelWriter(output_path, engine="xlsxwriter") as writer:
-                    results['energy'].to_excel(writer, sheet_name="Energy_Data", index=False)
-                    results['wagons'].to_excel(writer, sheet_name="Wagon_Data", index=False)
-                    results['intervals'].to_excel(writer, sheet_name="Zone_Intervals", index=False)
-                    results['allocation'].to_excel(writer, sheet_name="Energy_Allocation", index=False)
-                    summary.to_excel(writer, sheet_name="Monthly_Summary", index=False)
-                    yearly.to_excel(writer, sheet_name="Yearly_Summary", index=False)
-                
-                with open(output_path, "rb") as f:
-                    st.download_button(
-                        label="📥 Download Complete Excel Report",
-                        data=f.read(),
-                        file_name="Dryer_KPI_Analysis.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                with tab1:
+                    st.dataframe(
+                        summary.style.format({
+                            "Energy_kWh": "{:.2f}",
+                            "Volume_m3": "{:.2f}",
+                            "kWh_per_m3": "{:.2f}"
+                        }),
                         use_container_width=True
                     )
                 
-                st.success("✅ Analysis complete! Explore the visualizations above or download the full report.")
-                
+                with tab2:
+                    st.dataframe(
+                        yearly.style.format({
+                            "Energy_kWh": "{:.2f}",
+                            "Volume_m3": "{:.2f}",
+                            "kWh_per_m3": "{:.2f}"
+                        }),
+                        use_container_width=True
+                    )
+            
+            # --------------- Download Section ---------------
+            st.markdown('<div class="section-header">📥 Export Results</div>', 
+                       unsafe_allow_html=True)
+            
+            # Create Excel file in memory
+            excel_data = create_excel_download(results)
+            
+            st.download_button(
+                label="📥 Download Complete Excel Report",
+                data=excel_data,
+                file_name="Dryer_KPI_Analysis.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True
+            )
+            
+            st.success("✅ Analysis complete! Explore the visualizations above or download the full report.")
+            
         except Exception as e:
             st.error(f"❌ An error occurred during analysis: {str(e)}")
             with st.expander("🔍 View Error Details"):
                 st.exception(e)
+        
+        finally:
+            # Clean up temporary files
+            if tmp_e_path and os.path.exists(tmp_e_path):
+                try:
+                    os.unlink(tmp_e_path)
+                except:
+                    pass
+            
+            if tmp_w_path and os.path.exists(tmp_w_path):
+                try:
+                    os.unlink(tmp_w_path)
+                except:
+                    pass
