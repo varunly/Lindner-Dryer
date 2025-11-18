@@ -109,7 +109,7 @@ with st.sidebar:
     products = st.multiselect(
         "🧱 Product(s):",
         ["L30", "L32", "L34", "L36", "L38", "L40", "N40", "N44"],
-        default=["L36"],
+        default=["L30", "L32", "L34", "L36", "L38", "L40", "N40", "N44"],
         help="Select one or more products to analyze"
     )
     
@@ -420,3 +420,4 @@ if run_button:
                     os.unlink(tmp_w_path)
                 except:
                     pass
+
