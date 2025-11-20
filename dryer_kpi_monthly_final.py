@@ -120,6 +120,7 @@ def parse_energy(df: pd.DataFrame) -> pd.DataFrame:
     df["E_start"] = df["Zeitstempel"]
     df["E_end"] = df["Zeitstempel"] + pd.Timedelta(hours=1)
 
+    logger.info(f"Parsed {len(df)} energy records")
     return df
 
 
@@ -147,9 +148,11 @@ def parse_wagon(df: pd.DataFrame) -> pd.DataFrame:
             df = df.rename(columns={col: "WG_Nr"})
             break
 
-    # clean product names — FIXED .str.strip()
+    # clean product names
     if "Produkt" in df.columns:
         df["Produkt"] = df["Produkt"].astype(str).str.strip()
+    else:
+        df["Produkt"] = "Unknown"
 
     # volume
     if "m³" in df.columns:
@@ -205,6 +208,8 @@ def parse_wagon(df: pd.DataFrame) -> pd.DataFrame:
     df["Year"] = df["t0"].dt.year
 
     df = df[df["t0"].notna()].copy()
+    
+    logger.info(f"Parsed {len(df)} wagon records")
     return df
 
 
@@ -235,11 +240,12 @@ def build_intervals(row: pd.Series) -> List[Tuple[str, pd.Timestamp, pd.Timestam
 
 def explode_intervals(df: pd.DataFrame) -> pd.DataFrame:
     """Explode wagons into one row per zone interval."""
+    logger.info("Exploding wagon data into zone intervals...")
     rows = []
     for _, r in df.iterrows():
         for z, s, e in build_intervals(r):
             rows.append({
-                "WG_Nr": r["WG_Nr"],
+                "WG_Nr": r.get("WG_Nr", ""),
                 "Produkt": r["Produkt"],
                 "m3": r["m3"],
                 "Zone": z,
@@ -248,24 +254,35 @@ def explode_intervals(df: pd.DataFrame) -> pd.DataFrame:
                 "Month": r["Month"],
                 "Year": r["Year"],
             })
-    return pd.DataFrame(rows)
+    
+    result = pd.DataFrame(rows)
+    logger.info(f"Created {len(result)} zone intervals")
+    return result
 
 
 # =====================================================================
-# ENERGY ALLOCATION
+# ENERGY ALLOCATION (FIXED)
 # =====================================================================
 def allocate_energy(e: pd.DataFrame, ivals: pd.DataFrame) -> pd.DataFrame:
     """Allocate energy to products based on time overlap."""
+    logger.info("Allocating energy to products...")
     results = []
 
     for z_key, z_name in ZONE_ENERGY_MAPPING.items():
         col = f"E_{z_name}_kWh"
 
+        if col not in e.columns:
+            logger.warning(f"Energy column {col} not found")
+            continue
+
         e_zone = e[e[col] > 0].copy()
         iv_zone = ivals[ivals["Zone"] == z_key].copy()
 
         if e_zone.empty or iv_zone.empty:
+            logger.warning(f"No data for {z_key}")
             continue
+
+        logger.info(f"Processing {z_key}: {len(e_zone)} energy × {len(iv_zone)} intervals")
 
         # chunked cross join
         chunk = 1000
@@ -273,15 +290,26 @@ def allocate_energy(e: pd.DataFrame, ivals: pd.DataFrame) -> pd.DataFrame:
 
         for i in range(0, len(iv_zone), chunk):
             part = iv_zone.iloc[i:i+chunk]
-            e_temp = e_zone.copy(); e_temp["_key"] = 1
-            p_temp = part.copy();  p_temp["_key"] = 1
+            
+            e_temp = e_zone.copy()
+            e_temp["_key"] = 1
+            
+            p_temp = part.copy()
+            p_temp["_key"] = 1
 
-            merged = e_temp.merge(p_temp, on="_key")
+            merged = e_temp.merge(p_temp, on="_key", suffixes=("_e", "_p"))
+            merged.drop("_key", axis=1, inplace=True)
+
+            # Filter overlapping intervals
             merged = merged[
                 (merged["P_end"] > merged["E_start"]) &
                 (merged["P_start"] < merged["E_end"])
             ]
 
+            if merged.empty:
+                continue
+
+            # Calculate overlap
             merged["latest_start"] = merged[["E_start","P_start"]].max(axis=1)
             merged["earliest_end"] = merged[["E_end","P_end"]].min(axis=1)
             merged["Overlap_h"] = (
@@ -291,19 +319,42 @@ def allocate_energy(e: pd.DataFrame, ivals: pd.DataFrame) -> pd.DataFrame:
 
             merged = merged[merged["Overlap_h"] > 0]
 
+            if merged.empty:
+                continue
+
             merged["Energy_share_kWh"] = merged[col] * merged["Overlap_h"]
 
-            zone_res.append(
-                merged[["Month_e","Produkt","m3","Overlap_h","Energy_share_kWh"]]
-                .rename(columns={"Month_e":"Month"})
-                .assign(Zone=z_key)
-            )
+            # ✅ FIX: Smart column detection for Month
+            if "Month_e" in merged.columns:
+                month_col = "Month_e"
+            elif "Month_p" in merged.columns:
+                month_col = "Month_p"
+            elif "Month" in merged.columns:
+                month_col = "Month"
+            else:
+                # Fallback: extract from timestamp
+                merged["Month"] = merged["E_start"].dt.month
+                month_col = "Month"
+
+            # Select columns and rename
+            result = merged[[
+                month_col, "Produkt", "m3", "Overlap_h", "Energy_share_kWh"
+            ]].copy()
+
+            result = result.rename(columns={month_col: "Month"})
+            result["Zone"] = z_key
+
+            zone_res.append(result)
 
         if zone_res:
             results.append(pd.concat(zone_res, ignore_index=True))
 
     if results:
-        return pd.concat(results, ignore_index=True)
+        final = pd.concat(results, ignore_index=True)
+        logger.info(f"Allocated {len(final)} energy records")
+        return final
+    
+    logger.warning("No energy could be allocated")
     return pd.DataFrame(columns=["Month","Produkt","Zone","Energy_share_kWh","Overlap_h","m3"])
 
 
@@ -336,7 +387,7 @@ def predict_mix_energy(product_mix_m3: dict,
     total_water = 0
 
     for prod, vol in product_mix_m3.items():
-        if vol <= 0:
+        if vol is None or vol <= 0:
             continue
         total_volume += vol
         if prod in WATER_PER_M3_KG:
@@ -350,10 +401,24 @@ def predict_mix_energy(product_mix_m3: dict,
         "mean_water_per_m3": mean_water,
     }
 
-    if baseline_kwh_per_m3:
+    if baseline_kwh_per_m3 and total_volume > 0:
         result["energy_from_kwh_per_m3"] = baseline_kwh_per_m3 * total_volume
 
-    if baseline_kwh_per_kg:
+    if baseline_kwh_per_kg and total_water > 0:
         result["energy_from_kwh_per_kg"] = baseline_kwh_per_kg * total_water
 
     return result
+
+
+# =====================================================================
+# MAIN (for standalone testing)
+# =====================================================================
+def main():
+    """Standalone execution for testing."""
+    # This is a placeholder for local testing
+    # The Streamlit app uses these functions with uploaded files
+    logger.info("Module loaded successfully. Use from Streamlit app.")
+
+
+if __name__ == "__main__":
+    main()
