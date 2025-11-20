@@ -409,6 +409,49 @@ def predict_mix_energy(product_mix_m3: dict,
 
     return result
 
+def compute_product_wagon_stats(wagons: pd.DataFrame) -> dict:
+    """
+    Compute per-product wagon statistics:
+      - average m3 per wagon
+      - average residence time in hours/days
+      - wagon count
+
+    Requires wagons dataframe with:
+      WG_Nr, Produkt, m3, t0, Entnahme
+    """
+    df = wagons.copy()
+
+    # Compute residence time
+    if "Entnahme" in df.columns and "t0" in df.columns:
+        df["residence_h"] = (
+            (df["Entnahme"] - df["t0"]).dt.total_seconds() / 3600
+        )
+    else:
+        df["residence_h"] = np.nan
+
+    # Group by Product
+    stats = (
+        df.groupby("Produkt", as_index=False)
+        .agg(
+            avg_m3_per_wagon=("m3", "mean"),
+            avg_residence_h=("residence_h", "mean"),
+            wagon_count=("WG_Nr", "count"),
+        )
+    )
+
+    stats["avg_residence_days"] = stats["avg_residence_h"] / 24.0
+
+    # Convert to dictionaries
+    wagon_capacity = stats.set_index("Produkt")["avg_m3_per_wagon"].to_dict()
+    residence_h = stats.set_index("Produkt")["avg_residence_h"].to_dict()
+    residence_days = stats.set_index("Produkt")["avg_residence_days"].to_dict()
+
+    return {
+        "wagon_capacity_m3": wagon_capacity,
+        "residence_h": residence_h,
+        "residence_days": residence_days,
+        "raw_stats": stats,
+    }
 
 # =====================================================================
 # MAIN (for standalone testing)
@@ -422,3 +465,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
