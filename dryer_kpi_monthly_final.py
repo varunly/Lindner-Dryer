@@ -682,6 +682,393 @@ def main():
         logger.error("Error during analysis: %s", str(exc), exc_info=True)
         raise
 
+# ===================================================================
+# 9. WATER-LOSS FILE PARSING & INTEGRATION
+# ===================================================================
+
+def parse_waterloss(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Parse the water-loss measurement file.
+    
+    Expected columns (flexible naming):
+    - Initial weight (Anfangsgewicht, initial weight, gewicht vorher)
+    - Final weight (Endgewicht, final weight, gewicht nachher)
+    - Product type (Produkt, product, type)
+    - Dimensions: length, width, thickness
+    - Date/timestamp
+    - Wagon number (optional)
+    
+    Returns cleaned dataframe with standardized column names.
+    """
+    logger.info("Parsing water-loss measurement data...")
+    df = df.copy()
+    
+    # Normalize column names to lowercase for easier matching
+    df.columns = [str(c).replace("\n", " ").strip().lower() for c in df.columns]
+    
+    # Flexible column mapping
+    column_map = {
+        'initial_weight': ['anfangsgewicht', 'anfangsgew', 'initial weight', 
+                          'gewicht vorher', 'weight before', 'gew. vorher'],
+        'final_weight': ['endgewicht', 'endgew', 'final weight', 
+                        'gewicht nachher', 'weight after', 'gew. nachher'],
+        'product': ['produkt', 'product', 'type', 'produkttyp', 'material'],
+        'length': ['länge', 'laenge', 'length', 'l [mm]', 'l[mm]', 'länge [mm]'],
+        'width': ['breite', 'width', 'b [mm]', 'b[mm]', 'breite [mm]'],
+        'thickness': ['dicke', 'stärke', 'staerke', 'thickness', 
+                     'd [mm]', 'd[mm]', 'dicke [mm]', 'stärke [mm]'],
+        'date': ['datum', 'date', 'zeitpunkt', 'timestamp', 'messdatum', 
+                'press-zeit', 'pressdat. + zeit'],
+        'wagon': ['wg', 'wagon', 'wagen', 'wg-nr', 'hordenwagen', 'wg nr'],
+        'water_loss': ['ausgetr. wasser', 'wasserverlust', 'water loss', 
+                      'verlust', 'wasser [kg]', 'h2o [kg]']
+    }
+    
+    # Find matching columns
+    parsed_cols = {}
+    for target, possible_names in column_map.items():
+        for col in df.columns:
+            if any(name in col for name in possible_names):
+                parsed_cols[target] = col
+                logger.info(f"Mapped {target} → {col}")
+                break
+    
+    # Build result dataframe
+    result = pd.DataFrame()
+    
+    # Weights (in kg)
+    if 'initial_weight' in parsed_cols:
+        result['initial_weight_kg'] = pd.to_numeric(
+            df[parsed_cols['initial_weight']], errors='coerce'
+        )
+    else:
+        logger.warning("Initial weight column not found!")
+        result['initial_weight_kg'] = np.nan
+    
+    if 'final_weight' in parsed_cols:
+        result['final_weight_kg'] = pd.to_numeric(
+            df[parsed_cols['final_weight']], errors='coerce'
+        )
+    else:
+        logger.warning("Final weight column not found!")
+        result['final_weight_kg'] = np.nan
+    
+    # If direct water loss is given
+    if 'water_loss' in parsed_cols:
+        result['water_loss_kg'] = pd.to_numeric(
+            df[parsed_cols['water_loss']], errors='coerce'
+        )
+    
+    # Product type
+    if 'product' in parsed_cols:
+        result['Produkt'] = df[parsed_cols['product']].astype(str).str.strip()
+        # Normalize product names (remove spaces, convert to standard format)
+        result['Produkt'] = result['Produkt'].str.replace(' ', '')
+    else:
+        logger.warning("Product column not found!")
+        result['Produkt'] = 'Unknown'
+    
+    # Dimensions (convert mm to m if needed)
+    for dim in ['length', 'width', 'thickness']:
+        if dim in parsed_cols:
+            val = pd.to_numeric(df[parsed_cols[dim]], errors='coerce')
+            # Auto-detect unit: if median > 10, assume mm; else m
+            if val.median() > 10:
+                val = val / 1000.0  # mm → m
+            result[f'{dim}_m'] = val
+        else:
+            # Use defaults
+            if dim == 'length':
+                result['length_m'] = 2.0  # standard board length
+            elif dim == 'width':
+                result['width_m'] = 0.605  # standard board width
+            elif dim == 'thickness':
+                # Try to extract from product name (e.g., "L36" → 36mm)
+                result['thickness_m'] = (
+                    result['Produkt']
+                    .str.extract(r'(\d+)')[0]
+                    .astype(float) / 1000.0
+                )
+    
+    # Date/timestamp
+    if 'date' in parsed_cols:
+        result['timestamp'] = pd.to_datetime(df[parsed_cols['date']], errors='coerce')
+        result['Month'] = result['timestamp'].dt.month
+        result['Year'] = result['timestamp'].dt.year
+        result['Date'] = result['timestamp'].dt.date
+    else:
+        result['timestamp'] = pd.NaT
+        result['Month'] = np.nan
+        result['Year'] = np.nan
+    
+    # Wagon number (for linking)
+    if 'wagon' in parsed_cols:
+        result['WG_Nr'] = df[parsed_cols['wagon']].astype(str).str.strip()
+    
+    # Remove completely empty rows
+    result = result.dropna(
+        how='all', 
+        subset=['initial_weight_kg', 'final_weight_kg', 'water_loss_kg']
+    )
+    
+    logger.info(f"Parsed {len(result)} water-loss measurement records")
+    return result
+
+
+def calculate_waterloss_metrics(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Calculate all water-loss derived metrics.
+    
+    Input: parsed water-loss dataframe from parse_waterloss()
+    
+    Computes:
+    - water_loss_kg (if not already present)
+    - water_loss_pct (%)
+    - volume_m3
+    - water_per_m3 (kg/m³)
+    - deviation from benchmark
+    - validation flags
+    
+    Returns enriched dataframe.
+    """
+    logger.info("Calculating water-loss metrics...")
+    df = df.copy()
+    
+    # Calculate water loss if not already present
+    if 'water_loss_kg' not in df.columns or df['water_loss_kg'].isna().all():
+        df['water_loss_kg'] = df['initial_weight_kg'] - df['final_weight_kg']
+    
+    # Water loss percentage
+    df['water_loss_pct'] = (
+        df['water_loss_kg'] / df['initial_weight_kg'].replace(0, np.nan)
+    ) * 100
+    
+    # Board volume (m³)
+    df['volume_m3'] = df['length_m'] * df['width_m'] * df['thickness_m']
+    
+    # Water loss per m³ (kg/m³) - this is the KEY metric
+    df['water_per_m3_measured'] = (
+        df['water_loss_kg'] / df['volume_m3'].replace(0, np.nan)
+    )
+    
+    # Add benchmark values for comparison
+    df['water_per_m3_benchmark'] = (
+        df['Produkt'].astype(str).map(WATER_PER_M3_KG)
+    )
+    
+    # Calculate deviation from benchmark
+    df['water_deviation_pct'] = (
+        (df['water_per_m3_measured'] - df['water_per_m3_benchmark']) / 
+        df['water_per_m3_benchmark'].replace(0, np.nan)
+    ) * 100
+    
+    # Validation: flag suspicious measurements
+    df['is_valid'] = (
+        (df['water_loss_kg'] > 0) &
+        (df['water_loss_kg'] < df['initial_weight_kg']) &
+        (df['water_loss_pct'] > 0) &
+        (df['water_loss_pct'] < 50) &  # max 50% water loss
+        (df['volume_m3'] > 0) &
+        (df['water_per_m3_measured'] > 0) &
+        (df['water_per_m3_measured'] < 1000)  # sanity check
+    )
+    
+    # Log statistics
+    valid_df = df[df['is_valid']]
+    if not valid_df.empty:
+        logger.info(f"Valid measurements: {len(valid_df)}/{len(df)}")
+        logger.info(f"Avg water loss: {valid_df['water_loss_kg'].mean():.2f} kg")
+        logger.info(f"Avg water loss %: {valid_df['water_loss_pct'].mean():.2f}%")
+        logger.info(f"Avg water/m³: {valid_df['water_per_m3_measured'].mean():.2f} kg/m³")
+        
+        # Show deviation from benchmarks
+        for product in valid_df['Produkt'].unique():
+            prod_data = valid_df[valid_df['Produkt'] == product]
+            if len(prod_data) > 0:
+                measured = prod_data['water_per_m3_measured'].mean()
+                benchmark = WATER_PER_M3_KG.get(product, np.nan)
+                if not np.isnan(benchmark):
+                    deviation = ((measured - benchmark) / benchmark) * 100
+                    logger.info(
+                        f"{product}: measured={measured:.1f} kg/m³, "
+                        f"benchmark={benchmark:.1f} kg/m³, "
+                        f"deviation={deviation:+.1f}%"
+                    )
+    
+    return df
+
+
+def merge_energy_water_actual(
+    alloc_df: pd.DataFrame, 
+    water_df: pd.DataFrame
+) -> pd.DataFrame:
+    """
+    Merge energy allocation with ACTUAL water-loss measurements.
+    
+    Strategy:
+    1. Try to merge by WG_Nr (wagon number) if available
+    2. Fall back to product-based averages
+    3. Use benchmark values where measurements are missing
+    
+    Returns merged dataframe with actual water KPIs.
+    """
+    logger.info("Merging energy allocation with actual water-loss data...")
+    
+    alloc = alloc_df.copy()
+    water = water_df[water_df['is_valid']].copy()
+    
+    # Strategy 1: Direct merge by wagon number
+    if 'WG_Nr' in water.columns and 'WG_Nr' in alloc.columns:
+        logger.info("Attempting merge by wagon number...")
+        
+        # Aggregate water data by wagon (in case multiple measurements per wagon)
+        water_by_wagon = water.groupby('WG_Nr').agg({
+            'water_loss_kg': 'mean',
+            'water_per_m3_measured': 'mean',
+            'water_loss_pct': 'mean',
+            'volume_m3': 'mean'
+        }).reset_index()
+        
+        merged = alloc.merge(
+            water_by_wagon,
+            on='WG_Nr',
+            how='left',
+            suffixes=('', '_measured')
+        )
+        
+        match_rate = (merged['water_loss_kg'].notna().sum() / len(merged)) * 100
+        logger.info(f"Wagon-based merge: {match_rate:.1f}% matched")
+    else:
+        merged = alloc.copy()
+        logger.info("No wagon numbers available for direct merge")
+    
+    # Strategy 2: Fill missing with product-based averages from measurements
+    water_by_product = water.groupby('Produkt').agg({
+        'water_per_m3_measured': 'mean',
+        'water_loss_pct': 'mean'
+    }).reset_index()
+    
+    water_by_product.columns = [
+        'Produkt', 'water_per_m3_prod_avg', 'water_loss_pct_prod_avg'
+    ]
+    
+    merged = merged.merge(water_by_product, on='Produkt', how='left')
+    
+    # Create final water columns using hierarchy: direct → product avg → benchmark
+    if 'water_per_m3_measured' not in merged.columns:
+        merged['water_per_m3_measured'] = np.nan
+    
+    merged['water_per_m3_benchmark'] = (
+        merged['Produkt'].astype(str).map(WATER_PER_M3_KG)
+    )
+    
+    # Use best available water density
+    merged['water_per_m3_final'] = (
+        merged['water_per_m3_measured']
+        .fillna(merged['water_per_m3_prod_avg'])
+        .fillna(merged['water_per_m3_benchmark'])
+    )
+    
+    # Calculate water mass using final density
+    merged['Water_kg'] = merged['m3'] * merged['water_per_m3_final']
+    
+    # Mark data source
+    merged['water_source'] = 'benchmark'
+    merged.loc[
+        merged['water_per_m3_measured'].notna(), 'water_source'
+    ] = 'measured'
+    merged.loc[
+        merged['water_per_m3_measured'].isna() & 
+        merged['water_per_m3_prod_avg'].notna(),
+        'water_source'
+    ] = 'product_average'
+    
+    logger.info("Water data sources:")
+    logger.info(merged['water_source'].value_counts().to_string())
+    
+    return merged
+
+
+def compute_water_kpis(merged_df: pd.DataFrame) -> dict:
+    """
+    Compute comprehensive water-based KPIs from merged energy+water data.
+    
+    Returns dictionary with:
+    - product_kpis: KPIs aggregated by product
+    - monthly_kpis: KPIs aggregated by month
+    - comparison: measured vs. benchmark comparison
+    """
+    logger.info("Computing water-based KPIs...")
+    
+    df = merged_df[merged_df['Water_kg'].notna()].copy()
+    
+    # Add kWh/kg metric
+    df['kWh_per_kg'] = df['Energy_share_kWh'] / df['Water_kg'].replace(0, np.nan)
+    
+    # 1. Product-level KPIs
+    product_kpis = df.groupby('Produkt').agg({
+        'Energy_share_kWh': 'sum',
+        'Water_kg': 'sum',
+        'm3': 'sum',
+        'water_per_m3_final': 'mean',
+        'water_per_m3_measured': lambda x: x.dropna().mean() if x.notna().any() else np.nan,
+        'water_per_m3_benchmark': 'first',
+        'kWh_per_kg': 'mean'
+    }).reset_index()
+    
+    product_kpis.columns = [
+        'Produkt', 'total_energy_kwh', 'total_water_kg', 'total_volume_m3',
+        'avg_water_per_m3_used', 'avg_water_per_m3_measured', 
+        'water_per_m3_benchmark', 'avg_kwh_per_kg'
+    ]
+    
+    product_kpis['avg_kwh_per_m3'] = (
+        product_kpis['total_energy_kwh'] / 
+        product_kpis['total_volume_m3'].replace(0, np.nan)
+    )
+    
+    # Deviation from benchmark
+    product_kpis['water_deviation_pct'] = (
+        (product_kpis['avg_water_per_m3_measured'] - 
+         product_kpis['water_per_m3_benchmark']) / 
+        product_kpis['water_per_m3_benchmark'].replace(0, np.nan)
+    ) * 100
+    
+    # 2. Monthly KPIs
+    monthly_kpis = df.groupby('Month').agg({
+        'Energy_share_kWh': 'sum',
+        'Water_kg': 'sum',
+        'm3': 'sum'
+    }).reset_index()
+    
+    monthly_kpis.columns = [
+        'Month', 'total_energy_kwh', 'total_water_kg', 'total_volume_m3'
+    ]
+    
+    monthly_kpis['kwh_per_kg'] = (
+        monthly_kpis['total_energy_kwh'] / 
+        monthly_kpis['total_water_kg'].replace(0, np.nan)
+    )
+    monthly_kpis['kwh_per_m3'] = (
+        monthly_kpis['total_energy_kwh'] / 
+        monthly_kpis['total_volume_m3'].replace(0, np.nan)
+    )
+    
+    # 3. Comparison dataframe (measured vs benchmark)
+    comparison = product_kpis[[
+        'Produkt', 
+        'avg_water_per_m3_measured', 
+        'water_per_m3_benchmark',
+        'water_deviation_pct'
+    ]].copy()
+    
+    return {
+        'product': product_kpis,
+        'monthly': monthly_kpis,
+        'comparison': comparison,
+        'merged_data': df
+    }
 
 if __name__ == "__main__":
     main()
+
