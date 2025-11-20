@@ -12,7 +12,8 @@ from io import BytesIO
 try:
     from dryer_kpi_monthly_final import (
         parse_energy, parse_wagon, explode_intervals, 
-        allocate_energy, CONFIG
+        allocate_energy, parse_waterloss, calculate_waterloss_metrics,
+        merge_energy_water, compute_kpis, CONFIG
     )
 except ImportError:
     st.error("❌ Unable to import dryer_kpi_monthly_final module")
@@ -37,7 +38,6 @@ st.markdown("""
         margin-bottom: 20px;
         text-shadow: 1px 1px 2px rgba(0,0,0,0.1);
     }
-    
     .section-header {
         color: #003366;
         font-size: 22px;
@@ -47,7 +47,6 @@ st.markdown("""
         border-bottom: 2px solid #003366;
         padding-bottom: 6px;
     }
-    
     .metric-card {
         background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
         padding: 20px;
@@ -56,19 +55,16 @@ st.markdown("""
         box-shadow: 0 4px 15px rgba(0,0,0,0.2);
         color: white;
     }
-    
     .metric-card h3 {
         margin: 0;
         font-size: 16px;
         opacity: 0.9;
     }
-    
     .metric-card h2 {
         margin: 10px 0 0 0;
         font-size: 32px;
         font-weight: 700;
     }
-    
     .stDownloadButton button {
         background-color: #003366;
         color: white;
@@ -83,7 +79,7 @@ st.markdown("""
 st.markdown('<div class="main-title">🏭 Lindner – Dryer KPI Monitoring Dashboard</div>', 
             unsafe_allow_html=True)
 
-st.info("📊 Upload your Energy and Hordenwagen files to analyze dryer efficiency across zones and products.")
+st.info("📊 Upload Energy, Hordenwagen, and Water Loss files to analyze efficiency.")
 
 # ------------------ Sidebar ------------------
 with st.sidebar:
@@ -92,16 +88,9 @@ with st.sidebar:
     st.markdown("---")
     
     st.subheader("📁 Data Upload")
-    energy_file = st.file_uploader(
-        "📊 Energy File (.xlsx)", 
-        type=["xlsx"],
-        help="Upload the hourly energy consumption Excel file"
-    )
-    wagon_file = st.file_uploader(
-        "🚛 Hordenwagen File (.xlsm, .xlsx)", 
-        type=["xlsm", "xlsx"],
-        help="Upload the wagon tracking Excel file"
-    )
+    energy_file = st.file_uploader("📊 Energy File (.xlsx)", type=["xlsx"])
+    wagon_file = st.file_uploader("🚛 Hordenwagen File (.xlsm, .xlsx)", type=["xlsm", "xlsx"])
+    water_file = st.file_uploader("💧 Water Loss File (.xlsx)", type=["xlsx"])
     
     st.markdown("---")
     st.subheader("⚙️ Filters")
@@ -109,24 +98,16 @@ with st.sidebar:
     products = st.multiselect(
         "🧱 Product(s):",
         ["L30", "L32", "L34", "L36", "L38", "L40", "N40", "N44"],
-        default=["L30", "L32", "L34", "L36", "L38", "L40", "N40", "N44"],
-        help="Select one or more products to analyze"
+        default=["L30", "L32", "L34", "L36", "L38", "L40", "N40", "N44"]
     )
     
-    month = st.number_input(
-        "📅 Month (0 = all):",
-        min_value=0,
-        max_value=12,
-        value=0,
-        help="Filter by specific month (1-12) or 0 for all months"
-    )
+    month = st.number_input("📅 Month (0 = all):", min_value=0, max_value=12, value=0)
     
     st.markdown("---")
     run_button = st.button("▶️ Run Analysis", use_container_width=True)
 
 # ------------------ Helper Functions ------------------
 def create_kpi_card(title, value, unit):
-    """Create a styled KPI metric card"""
     return f'''
     <div class="metric-card">
         <h3>{title}</h3>
@@ -135,313 +116,177 @@ def create_kpi_card(title, value, unit):
     '''
 
 def create_excel_download(results):
-    """Create Excel file in memory for download"""
     output = BytesIO()
-    
     with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
-        results['energy'].to_excel(writer, sheet_name="Energy_Data", index=False)
-        results['wagons'].to_excel(writer, sheet_name="Wagon_Data", index=False)
-        results['intervals'].to_excel(writer, sheet_name="Zone_Intervals", index=False)
-        results['allocation'].to_excel(writer, sheet_name="Energy_Allocation", index=False)
         results['summary'].to_excel(writer, sheet_name="Monthly_Summary", index=False)
         results['yearly'].to_excel(writer, sheet_name="Yearly_Summary", index=False)
-    
+        results['kpi_merged'].to_excel(writer, sheet_name="Detailed_KPIs", index=False)
+        if not results['water_metrics'].empty:
+            results['water_metrics'].to_excel(writer, sheet_name="Water_Samples_Raw", index=False)
+        results['allocation'].to_excel(writer, sheet_name="Energy_Allocation", index=False)
     output.seek(0)
     return output
 
-def run_analysis(energy_path, wagon_path, products_filter, month_filter):
-    """Run the KPI analysis with progress tracking"""
-    
+def run_analysis(energy_path, wagon_path, water_path, products_filter, month_filter):
     progress_bar = st.progress(0)
     status_text = st.empty()
     
     try:
-        # Step 1: Parse energy data
+        # 1. Energy
         status_text.text("🔄 Parsing energy data...")
-        progress_bar.progress(20)
-        e_raw = pd.read_excel(energy_path, sheet_name=CONFIG["energy_sheet"])
-        e = parse_energy(e_raw)
+        progress_bar.progress(10)
+        e = parse_energy(pd.read_excel(energy_path, sheet_name=CONFIG["energy_sheet"]))
         
-        if e.empty:
-            raise ValueError("Energy data is empty after parsing")
+        # 2. Wagons
+        status_text.text("🔄 Parsing wagon data...")
+        progress_bar.progress(30)
+        w = parse_wagon(pd.read_excel(wagon_path, sheet_name=CONFIG["wagon_sheet"], header=CONFIG["wagon_header_row"]))
         
-        # Step 2: Parse wagon data
-        status_text.text("🔄 Parsing wagon tracking data...")
-        progress_bar.progress(40)
-        w_raw = pd.read_excel(
-            wagon_path, 
-            sheet_name=CONFIG["wagon_sheet"], 
-            header=CONFIG["wagon_header_row"]
-        )
-        w = parse_wagon(w_raw)
-        
-        if w.empty:
-            raise ValueError("Wagon data is empty after parsing")
-        
-        # Step 3: Apply filters
-        status_text.text("🔄 Applying filters...")
-        progress_bar.progress(60)
-        
+        # 3. Water Loss (Optional but recommended)
+        water_metrics = pd.DataFrame()
+        if water_path:
+            status_text.text("🔄 Parsing water loss data...")
+            progress_bar.progress(40)
+            w_loss_raw = parse_waterloss(water_path)
+            water_metrics = calculate_waterloss_metrics(w_loss_raw)
+
+        # 4. Filtering
         if products_filter:
             w = w[w["Produkt"].astype(str).isin(products_filter)]
-            if w.empty:
-                raise ValueError(f"No wagons found for products: {products_filter}")
-        
         if month_filter:
             e = e[e["Month"] == month_filter]
             w = w[w["Month"] == month_filter]
-            if e.empty or w.empty:
-                raise ValueError(f"No data found for month: {month_filter}")
-        
-        # Step 4: Process intervals
-        status_text.text("🔄 Processing zone intervals...")
-        progress_bar.progress(70)
+
+        # 5. Allocation
+        status_text.text("🔄 Allocating energy...")
+        progress_bar.progress(60)
         ivals = explode_intervals(w)
-        
-        if ivals.empty:
-            raise ValueError("No valid zone intervals could be created")
-        
-        # Step 5: Allocate energy
-        status_text.text("🔄 Allocating energy to products...")
-        progress_bar.progress(85)
         alloc = allocate_energy(e, ivals)
         
-        if alloc.empty:
-            raise ValueError("Energy allocation produced no results")
+        # 6. Merging Water Data
+        status_text.text("🔄 Merging physics data...")
+        progress_bar.progress(80)
         
-        # Step 6: Create summaries
-        status_text.text("🔄 Generating summaries...")
-        progress_bar.progress(95)
-        
+        # If we have water data, we merge it. If not, we create a dummy merge for code stability
+        if not water_metrics.empty:
+            merged_data = merge_energy_water(alloc, water_metrics)
+            kpi_df = compute_kpis(merged_data)
+        else:
+            # Fallback if no water file
+            st.warning("⚠️ No Water File uploaded. Water-based KPIs will be 0.")
+            alloc['total_water_kg'] = 0
+            merged_data = alloc
+            kpi_df = compute_kpis(merged_data)
+
+        # 7. Summaries
         summary = alloc.groupby(["Month", "Produkt", "Zone"], as_index=False).agg(
             Energy_kWh=("Energy_share_kWh", "sum"),
             Volume_m3=("m3", "sum")
         )
-        summary["kWh_per_m3"] = (
-            summary["Energy_kWh"] / summary["Volume_m3"].replace(0, pd.NA)
-        )
+        summary["kWh_per_m3"] = summary["Energy_kWh"] / summary["Volume_m3"].replace(0, pd.NA)
         
         yearly = summary.groupby(["Produkt", "Zone"], as_index=False).agg(
             Energy_kWh=("Energy_kWh", "sum"),
             Volume_m3=("Volume_m3", "sum")
         )
-        yearly["kWh_per_m3"] = (
-            yearly["Energy_kWh"] / yearly["Volume_m3"].replace(0, pd.NA)
-        )
-        
+        yearly["kWh_per_m3"] = yearly["Energy_kWh"] / yearly["Volume_m3"].replace(0, pd.NA)
+
         progress_bar.progress(100)
         status_text.text("✅ Analysis complete!")
         
         return {
             'summary': summary,
             'yearly': yearly,
-            'energy': e,
-            'wagons': w,
-            'intervals': ivals,
+            'water_metrics': water_metrics,
+            'kpi_merged': kpi_df,
             'allocation': alloc
         }
         
     except Exception as e:
-        status_text.empty()
-        progress_bar.empty()
-        raise e
-    finally:
-        # Clear progress indicators after a short delay
-        import time
-        time.sleep(0.5)
-        progress_bar.empty()
-        status_text.empty()
+        st.error(f"Error: {e}")
+        return None
 
 # ------------------ Main Processing ------------------
 
-# Initialize session state for results
 if 'results' not in st.session_state:
     st.session_state.results = None
-if 'analysis_complete' not in st.session_state:
-    st.session_state.analysis_complete = False
-
-# Clear results if files are changed
-if energy_file and wagon_file:
-    current_files = (energy_file.name, wagon_file.name)
-    if 'last_files' not in st.session_state:
-        st.session_state.last_files = current_files
-    elif st.session_state.last_files != current_files:
-        st.session_state.results = None
-        st.session_state.analysis_complete = False
-        st.session_state.last_files = current_files
 
 if run_button:
     if not energy_file or not wagon_file:
-        st.error("⚠️ Please upload both files before running analysis.")
+        st.error("⚠️ Energy and Wagon files are mandatory!")
     else:
-        tmp_e_path = None
-        tmp_w_path = None
-        
-        try:
-            # Create temporary files
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp_e:
-                tmp_e.write(energy_file.read())
-                tmp_e_path = tmp_e.name
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as te, \
+             tempfile.NamedTemporaryFile(delete=False, suffix=".xlsm") as tw:
+            te.write(energy_file.read())
+            tw.write(wagon_file.read())
             
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsm") as tmp_w:
-                tmp_w.write(wagon_file.read())
-                tmp_w_path = tmp_w.name
+            # Handle Water File (passed as object or temp file)
+            # Since parse_waterloss takes a file object or path, we can pass the BytesIO directly if not None
             
-            # Run analysis
             results = run_analysis(
-                tmp_e_path,
-                tmp_w_path,
-                products if products else None,
+                te.name, tw.name, water_file, 
+                products if products else None, 
                 month if month != 0 else None
             )
-            
-            # Store results in session state
             st.session_state.results = results
-            st.session_state.analysis_complete = True
-            
-        except Exception as e:
-            st.error(f"❌ An error occurred during analysis: {str(e)}")
-            with st.expander("🔍 View Error Details"):
-                st.exception(e)
-            st.session_state.results = None
-            st.session_state.analysis_complete = False
-        
-        finally:
-            # Clean up temporary files
-            if tmp_e_path and os.path.exists(tmp_e_path):
-                try:
-                    os.unlink(tmp_e_path)
-                except:
-                    pass
-            
-            if tmp_w_path and os.path.exists(tmp_w_path):
-                try:
-                    os.unlink(tmp_w_path)
-                except:
-                    pass
 
-# Display results if available
-if st.session_state.analysis_complete and st.session_state.results:
-    results = st.session_state.results
-    summary = results['summary']
-    yearly = results['yearly']
+# Display Logic
+if st.session_state.results:
+    res = st.session_state.results
+    kpi = res['kpi_merged']
+    water = res['water_metrics']
     
-    # Check if we have data
-    if summary.empty:
-        st.warning("⚠️ No data found matching the selected filters.")
-    else:
-        # --------------- KPI Cards ---------------
-        st.markdown('<div class="section-header">📈 Summary KPIs</div>', 
-                   unsafe_allow_html=True)
-        
-        total_energy = yearly["Energy_kWh"].sum()
-        avg_kpi = yearly["kWh_per_m3"].mean()
-        total_volume = yearly["Volume_m3"].sum()
-        
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.markdown(
-                create_kpi_card("Total Energy", total_energy, "kWh"),
-                unsafe_allow_html=True
-            )
-        with col2:
-            st.markdown(
-                create_kpi_card("Avg. Efficiency", avg_kpi, "kWh/m³"),
-                unsafe_allow_html=True
-            )
-        with col3:
-            st.markdown(
-                create_kpi_card("Total Volume", total_volume, "m³"),
-                unsafe_allow_html=True
-            )
-        
-        # --------------- Monthly Trend ---------------
-        st.markdown('<div class="section-header">📊 Monthly KPI Trend</div>', 
-                   unsafe_allow_html=True)
-        
-        fig1 = px.line(
-            summary,
-            x="Month",
-            y="kWh_per_m3",
-            color="Zone",
-            markers=True,
-            hover_data=["Produkt", "Energy_kWh", "Volume_m3"],
-            title="Energy Efficiency by Month and Zone"
-        )
-        fig1.update_layout(
-            height=500,
-            xaxis_title="Month",
-            yaxis_title="kWh/m³",
-            plot_bgcolor="white",
-            hovermode='x unified'
-        )
-        st.plotly_chart(fig1, use_container_width=True)
-        
-        # --------------- Zone Comparison ---------------
-        st.markdown('<div class="section-header">📉 Zone Comparison</div>', 
-                   unsafe_allow_html=True)
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            fig2 = px.bar(
-                yearly,
-                x="Zone",
-                y="kWh_per_m3",
-                color="Produkt",
-                text_auto=".2f",
-                title="Yearly KPI by Zone"
-            )
-            fig2.update_layout(height=400, plot_bgcolor="white")
-            st.plotly_chart(fig2, use_container_width=True)
-        
-        with col2:
-            fig3 = px.pie(
-                yearly,
-                values="Energy_kWh",
-                names="Zone",
-                title="Energy Distribution by Zone"
-            )
-            fig3.update_layout(height=400)
-            st.plotly_chart(fig3, use_container_width=True)
-        
-        # --------------- Data Tables ---------------
-        with st.expander("📋 View Detailed Data Tables"):
-            tab1, tab2 = st.tabs(["Monthly Summary", "Yearly Summary"])
+    # --- KPI Cards ---
+    st.markdown('<div class="section-header">📈 Efficiency KPIs</div>', unsafe_allow_html=True)
+    
+    # Aggregates
+    total_e = kpi['Energy_share_kWh'].sum()
+    total_w = kpi['total_water_kg'].sum()
+    total_v = kpi['m3'].sum()
+    
+    avg_kwh_m3 = total_e / total_v if total_v else 0
+    avg_kwh_kg = total_e / total_w if total_w else 0
+    
+    c1, c2, c3, c4 = st.columns(4)
+    c1.markdown(create_kpi_card("Total Energy", total_e, "kWh"), unsafe_allow_html=True)
+    c2.markdown(create_kpi_card("Total Water Evap.", total_w/1000, "Tons"), unsafe_allow_html=True)
+    c3.markdown(create_kpi_card("Spec. Energy (Vol)", avg_kwh_m3, "kWh/m³"), unsafe_allow_html=True)
+    c4.markdown(create_kpi_card("Spec. Energy (H2O)", avg_kwh_kg, "kWh/kg"), unsafe_allow_html=True)
+    
+    # --- Plots ---
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("### 💦 Water Removal Density (kg/m³) by Product")
+        if not water.empty:
+            fig_w = px.box(water, x="Produkt", y="water_per_m3", color="Produkt",
+                          title="Measured Water Loss per m³ (Sample Data)")
+            st.plotly_chart(fig_w, use_container_width=True)
+        else:
+            st.info("Upload Water Loss file to see density analytics.")
             
-            with tab1:
-                st.dataframe(
-                    summary.style.format({
-                        "Energy_kWh": "{:.2f}",
-                        "Volume_m3": "{:.2f}",
-                        "kWh_per_m3": "{:.2f}"
-                    }),
-                    use_container_width=True
-                )
+    with col2:
+        st.markdown("### ⚡ Efficiency: kWh per kg Water")
+        if not kpi.empty:
+            # Aggregate by product for bar chart
+            kpi_prod = kpi.groupby('Produkt')[['Energy_share_kWh', 'total_water_kg']].sum().reset_index()
+            kpi_prod['kwh_kg'] = kpi_prod['Energy_share_kWh'] / kpi_prod['total_water_kg']
             
-            with tab2:
-                st.dataframe(
-                    yearly.style.format({
-                        "Energy_kWh": "{:.2f}",
-                        "Volume_m3": "{:.2f}",
-                        "kWh_per_m3": "{:.2f}"
-                    }),
-                    use_container_width=True
-                )
+            fig_e = px.bar(kpi_prod, x="Produkt", y="kwh_kg", color="kwh_kg",
+                           title="Energy required to evaporate 1kg Water",
+                           color_continuous_scale="RdYlGn_r") # Red is high (bad), Green is low (good)
+            fig_e.add_hline(y=1.0, line_dash="dot", annotation_text="Target (1.0)")
+            st.plotly_chart(fig_e, use_container_width=True)
+
+    # --- Data Tables ---
+    with st.expander("📋 View KPI Details"):
+        st.dataframe(kpi.style.format("{:.2f}"))
         
-        # --------------- Download Section ---------------
-        st.markdown('<div class="section-header">📥 Export Results</div>', 
-                   unsafe_allow_html=True)
-        
-        # Create Excel file in memory
-        excel_data = create_excel_download(results)
-        
-        st.download_button(
-            label="📥 Download Complete Excel Report",
-            data=excel_data,
-            file_name="Dryer_KPI_Analysis.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True
-        )
-        
-        st.success("✅ Analysis complete! Explore the visualizations above or download the full report.")
+    # --- Export ---
+    st.download_button(
+        "📥 Download Full Excel Report",
+        data=create_excel_download(res),
+        file_name="Dryer_KPI_Analysis_Water_Integrated.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
