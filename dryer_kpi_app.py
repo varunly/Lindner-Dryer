@@ -15,6 +15,8 @@ try:
         explode_intervals,
         allocate_energy,
         add_water_kpis,
+        predict_weekly_energy_from_wagons,
+        compute_product_wagon_stats,
         predict_mix_energy,
         WATER_PER_M3_KG,
         CONFIG,
@@ -638,4 +640,5 @@ with st.form("weekly_prediction_form"):
         )
 
         st.success("✅ Analysis complete! You can explore the visualizations above or download the full report.")
+
 
