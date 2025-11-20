@@ -185,7 +185,8 @@ def allocate_energy(e: pd.DataFrame, ivals: pd.DataFrame) -> pd.DataFrame:
         if zone_res:
             results.append(pd.concat(zone_res, ignore_index=True))
 
-    if results:
+        if results:
+        
         return pd.concat(results, ignore_index=True)
 
 
@@ -670,4 +671,5 @@ if st.session_state.analysis_complete and st.session_state.results:
         st.success("✅ Analysis complete! Explore the charts or download the report.")
 
     return pd.DataFrame(columns=["Month", "Produkt", "Zone", "Energy_share_kWh", "Overlap_h", "m3"])
+
 
