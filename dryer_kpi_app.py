@@ -129,6 +129,66 @@ with st.sidebar:
     run_button = st.button("▶️ Run Analysis", use_container_width=True)
 
 
+def allocate_energy(e: pd.DataFrame, ivals: pd.DataFrame) -> pd.DataFrame:
+    """Allocate energy to products based on time overlap."""
+    results = []
+
+    for z_key, z_name in ZONE_ENERGY_MAPPING.items():
+        col = f"E_{z_name}_kWh"
+
+        e_zone = e[e[col] > 0].copy()
+        iv_zone = ivals[ivals["Zone"] == z_key].copy()
+
+        if e_zone.empty or iv_zone.empty:
+            continue
+
+        chunk = 1000
+        zone_res = []
+
+        for i in range(0, len(iv_zone), chunk):
+            part = iv_zone.iloc[i:i+chunk]
+
+            e_temp = e_zone.copy(); e_temp["_key"] = 1
+            p_temp = part.copy();  p_temp["_key"] = 1
+
+            merged = e_temp.merge(p_temp, on="_key")
+
+            # overlap condition
+            merged = merged[
+                (merged["P_end"] > merged["E_start"]) &
+                (merged["P_start"] < merged["E_end"])
+            ]
+
+            merged["latest_start"] = merged[["E_start", "P_start"]].max(axis=1)
+            merged["earliest_end"] = merged[["E_end", "P_end"]].min(axis=1)
+            merged["Overlap_h"] = (
+                (merged["earliest_end"] - merged["latest_start"])
+                .dt.total_seconds() / 3600
+            ).clip(lower=0)
+
+            merged = merged[merged["Overlap_h"] > 0]
+
+            merged["Energy_share_kWh"] = merged[col] * merged["Overlap_h"]
+
+            # ⬇⬇⬇ FIXED HERE — no Month_e anymore ⬇⬇⬇
+            result = merged[[
+                "Month",          # correct column
+                "Produkt",
+                "m3",
+                "Overlap_h",
+                "Energy_share_kWh"
+            ]].copy()
+
+            result["Zone"] = z_key
+            zone_res.append(result)
+
+        if zone_res:
+            results.append(pd.concat(zone_res, ignore_index=True))
+
+    if results:
+        return pd.concat(results, ignore_index=True)
+
+
 # ------------------ Helper Functions ------------------
 def create_kpi_card(title, value, unit):
     """Render a nice KPI card."""
@@ -609,63 +669,5 @@ if st.session_state.analysis_complete and st.session_state.results:
 
         st.success("✅ Analysis complete! Explore the charts or download the report.")
 
-def allocate_energy(e: pd.DataFrame, ivals: pd.DataFrame) -> pd.DataFrame:
-    """Allocate energy to products based on time overlap."""
-    results = []
-
-    for z_key, z_name in ZONE_ENERGY_MAPPING.items():
-        col = f"E_{z_name}_kWh"
-
-        e_zone = e[e[col] > 0].copy()
-        iv_zone = ivals[ivals["Zone"] == z_key].copy()
-
-        if e_zone.empty or iv_zone.empty:
-            continue
-
-        chunk = 1000
-        zone_res = []
-
-        for i in range(0, len(iv_zone), chunk):
-            part = iv_zone.iloc[i:i+chunk]
-
-            e_temp = e_zone.copy(); e_temp["_key"] = 1
-            p_temp = part.copy();  p_temp["_key"] = 1
-
-            merged = e_temp.merge(p_temp, on="_key")
-
-            # overlap condition
-            merged = merged[
-                (merged["P_end"] > merged["E_start"]) &
-                (merged["P_start"] < merged["E_end"])
-            ]
-
-            merged["latest_start"] = merged[["E_start", "P_start"]].max(axis=1)
-            merged["earliest_end"] = merged[["E_end", "P_end"]].min(axis=1)
-            merged["Overlap_h"] = (
-                (merged["earliest_end"] - merged["latest_start"])
-                .dt.total_seconds() / 3600
-            ).clip(lower=0)
-
-            merged = merged[merged["Overlap_h"] > 0]
-
-            merged["Energy_share_kWh"] = merged[col] * merged["Overlap_h"]
-
-            # ⬇⬇⬇ FIXED HERE — no Month_e anymore ⬇⬇⬇
-            result = merged[[
-                "Month",          # correct column
-                "Produkt",
-                "m3",
-                "Overlap_h",
-                "Energy_share_kWh"
-            ]].copy()
-
-            result["Zone"] = z_key
-            zone_res.append(result)
-
-        if zone_res:
-            results.append(pd.concat(zone_res, ignore_index=True))
-
-    if results:
-        return pd.concat(results, ignore_index=True)
-
     return pd.DataFrame(columns=["Month", "Produkt", "Zone", "Energy_share_kWh", "Overlap_h", "m3"])
+
