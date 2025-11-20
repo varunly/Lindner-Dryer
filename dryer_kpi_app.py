@@ -21,8 +21,8 @@ try:
         WATER_PER_M3_KG,
         CONFIG,
     )
-except ImportError:
-    st.error("❌ Unable to import dryer_kpi_monthly_final module. Check the file name and path.")
+except ImportError as e:
+    st.error(f"❌ Unable to import dryer_kpi_monthly_final module: {e}")
     st.stop()
 
 # ---------------------------------------------------------
@@ -512,9 +512,7 @@ if st.session_state.analysis_complete and st.session_state.results:
                 }
                 st.dataframe(yearly.style.format(fmt_y), use_container_width=True)
 
-       
-        # 🔮 WEEKLY PREDICTION — WAGONS PER WEEK
-                # ---------------- Weekly Prediction Helper ----------------
+        # ---------------- Weekly Prediction Helper ----------------
         st.markdown(
             '<div class="section-header">🔮 Weekly Energy Prediction (Wagons/Week)</div>',
             unsafe_allow_html=True,
@@ -525,12 +523,12 @@ if st.session_state.analysis_complete and st.session_state.results:
             "The system will automatically convert wagons → m³ → water load → energy."
         )
 
-        # --- Compute wagon capacities & residence times ---
+        # Compute wagon capacities & residence times
         wagon_stats = compute_product_wagon_stats(results["wagons"])
         wagon_capacity = wagon_stats["wagon_capacity_m3"]
         residence_days = wagon_stats["residence_days"]
 
-        # --- UI form ---
+        # UI form
         with st.form("weekly_prediction_form"):
 
             st.write("### Planned Wagons per Week")
@@ -587,7 +585,7 @@ if st.session_state.analysis_complete and st.session_state.results:
 
             submitted_weekly = st.form_submit_button("Predict Weekly Energy")
 
-        # ✅ CRITICAL FIX: This block MUST be OUTSIDE the form (proper indentation)
+        # Process prediction (OUTSIDE the form)
         if submitted_weekly:
             
             pred_week = predict_weekly_energy_from_wagons(
@@ -634,7 +632,7 @@ if st.session_state.analysis_complete and st.session_state.results:
             st.subheader("💧 Work-in-Progress (Water Inventory Inside Dryer)")
             st.metric("Estimated WIP Water (kg)", f"{pred_week['wip_water_kg_estimate']:,.0f}")
         
-            st.success("Weekly energy prediction completed.")
+            st.success("✅ Weekly energy prediction completed.")
 
         # ---------------- Export ----------------
         st.markdown(
