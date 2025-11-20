@@ -146,14 +146,14 @@ def allocate_energy(e: pd.DataFrame, ivals: pd.DataFrame) -> pd.DataFrame:
         zone_res = []
 
         for i in range(0, len(iv_zone), chunk):
-            part = iv_zone.iloc[i:i+chunk]
+            part = iv_zone.iloc[i:i + chunk]
 
             e_temp = e_zone.copy(); e_temp["_key"] = 1
             p_temp = part.copy();  p_temp["_key"] = 1
 
             merged = e_temp.merge(p_temp, on="_key")
 
-            # overlap condition
+            # overlap filter
             merged = merged[
                 (merged["P_end"] > merged["E_start"]) &
                 (merged["P_start"] < merged["E_end"])
@@ -168,14 +168,15 @@ def allocate_energy(e: pd.DataFrame, ivals: pd.DataFrame) -> pd.DataFrame:
 
             merged = merged[merged["Overlap_h"] > 0]
 
+            # energy share
             merged["Energy_share_kWh"] = merged[col] * merged["Overlap_h"]
 
-            # ⬇⬇⬇ FIXED HERE — no Month_e anymore ⬇⬇⬇
+            # FIXED: Month_e removed – use "Month"
             result = merged[[
-                "Month",          # correct column
-                "Produkt",
-                "m3",
-                "Overlap_h",
+                "Month", 
+                "Produkt", 
+                "m3", 
+                "Overlap_h", 
                 "Energy_share_kWh"
             ]].copy()
 
@@ -185,9 +186,13 @@ def allocate_energy(e: pd.DataFrame, ivals: pd.DataFrame) -> pd.DataFrame:
         if zone_res:
             results.append(pd.concat(zone_res, ignore_index=True))
 
-        if results:
-        
+    if results:
         return pd.concat(results, ignore_index=True)
+
+    return pd.DataFrame(
+        columns=["Month", "Produkt", "Zone", "Energy_share_kWh", "Overlap_h", "m3"]
+    )
+
 
 
 # ------------------ Helper Functions ------------------
@@ -671,5 +676,6 @@ if st.session_state.analysis_complete and st.session_state.results:
         st.success("✅ Analysis complete! Explore the charts or download the report.")
 
     return pd.DataFrame(columns=["Month", "Produkt", "Zone", "Energy_share_kWh", "Overlap_h", "m3"])
+
 
 
