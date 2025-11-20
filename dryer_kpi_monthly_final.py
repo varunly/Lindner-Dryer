@@ -9,13 +9,13 @@ This module:
 - Aggregates KPIs by month/product/zone
 - Computes kWh/m³
 - Uses built-in water-loss benchmarks to compute kWh/kg
-- Provides a prediction helper for future product mixes
+- Provides prediction helpers for future product mixes
 """
 
 import pandas as pd
 import numpy as np
 import logging
-from typing import List, Tuple
+from typing import List, Tuple, Dict
 
 # ---------------------------------------------------------
 # Logging
@@ -373,16 +373,24 @@ def add_water_kpis(df: pd.DataFrame) -> pd.DataFrame:
 
 
 # =====================================================================
-# PREDICTION HELPER
+# PREDICTION HELPERS
 # =====================================================================
-def predict_mix_energy(product_mix_m3: dict,
-                       baseline_kwh_per_m3=None,
-                       baseline_kwh_per_kg=None) -> dict:
+def predict_mix_energy(
+    product_mix_m3: dict,
+    baseline_kwh_per_m3=None,
+    baseline_kwh_per_kg=None
+) -> dict:
     """
-    Estimate energy use from a planned product mix.
-    product_mix_m3 = {"L36": 100, "N40": 50, ...}
+    Estimate energy use from a planned product mix (in m³).
+    
+    Args:
+        product_mix_m3: dict like {"L36": 100, "N40": 50} (m³ per product)
+        baseline_kwh_per_m3: energy efficiency (kWh/m³)
+        baseline_kwh_per_kg: specific energy (kWh/kg water)
+    
+    Returns:
+        dict with predictions
     """
-
     total_volume = 0
     total_water = 0
 
@@ -409,16 +417,21 @@ def predict_mix_energy(product_mix_m3: dict,
 
     return result
 
+
 def compute_product_wagon_stats(wagons: pd.DataFrame) -> dict:
     """
     Compute per-product wagon statistics:
-      - average m3 per wagon
+      - average m³ per wagon
       - average residence time in hours/days
       - wagon count
 
-    Requires wagons dataframe with:
-      WG_Nr, Produkt, m3, t0, Entnahme
+    Args:
+        wagons: Wagon dataframe with WG_Nr, Produkt, m3, t0, Entnahme
+    
+    Returns:
+        dict with statistics
     """
+    logger.info("Computing wagon statistics by product...")
     df = wagons.copy()
 
     # Compute residence time
@@ -446,6 +459,8 @@ def compute_product_wagon_stats(wagons: pd.DataFrame) -> dict:
     residence_h = stats.set_index("Produkt")["avg_residence_h"].to_dict()
     residence_days = stats.set_index("Produkt")["avg_residence_days"].to_dict()
 
+    logger.info(f"Computed stats for {len(stats)} products")
+    
     return {
         "wagon_capacity_m3": wagon_capacity,
         "residence_h": residence_h,
@@ -453,16 +468,92 @@ def compute_product_wagon_stats(wagons: pd.DataFrame) -> dict:
         "raw_stats": stats,
     }
 
+
+def predict_weekly_energy_from_wagons(
+    product_wagons_per_week: dict,
+    wagons_df: pd.DataFrame,
+    baseline_kwh_per_m3=None,
+    baseline_kwh_per_kg=None
+) -> dict:
+    """
+    Predict weekly energy consumption from planned wagons per week.
+    
+    Args:
+        product_wagons_per_week: dict like {"L36": 100, "N40": 50} (wagons/week)
+        wagons_df: historical wagon dataframe
+        baseline_kwh_per_m3: energy efficiency (kWh/m³)
+        baseline_kwh_per_kg: specific energy (kWh/kg water)
+    
+    Returns:
+        dict with weekly predictions
+    """
+    logger.info("Predicting weekly energy from wagon plan...")
+    
+    # Get wagon statistics
+    stats = compute_product_wagon_stats(wagons_df)
+    wagon_capacity = stats["wagon_capacity_m3"]
+    residence_days = stats["residence_days"]
+    
+    # Initialize totals
+    total_wagons = 0
+    total_volume = 0
+    total_water = 0
+    
+    # Calculate for each product
+    for prod, wagons_week in product_wagons_per_week.items():
+        if wagons_week is None or wagons_week <= 0:
+            continue
+        
+        total_wagons += wagons_week
+        
+        # Get wagon capacity (m³ per wagon)
+        capacity = wagon_capacity.get(prod, 1.5)  # fallback to 1.5 m³
+        volume = wagons_week * capacity
+        total_volume += volume
+        
+        # Get water load (kg water per m³)
+        if prod in WATER_PER_M3_KG:
+            water = volume * WATER_PER_M3_KG[prod]
+            total_water += water
+    
+    # Build result
+    result = {
+        "total_wagons_week": total_wagons,
+        "total_volume_m3_week": total_volume,
+        "total_water_kg_week": total_water,
+    }
+    
+    # Energy predictions
+    if baseline_kwh_per_m3 and total_volume > 0:
+        energy_week = baseline_kwh_per_m3 * total_volume
+        result["energy_week_from_kwh_per_m3"] = energy_week
+        result["avg_energy_per_day_from_kwh_per_m3"] = energy_week / 7
+    
+    if baseline_kwh_per_kg and total_water > 0:
+        energy_week = baseline_kwh_per_kg * total_water
+        result["energy_week_from_kwh_per_kg"] = energy_week
+        result["avg_energy_per_day_from_kwh_per_kg"] = energy_week / 7
+    
+    # WIP (Work-in-Progress) water estimate
+    # WIP = daily water throughput × average residence time
+    avg_residence = np.nanmean(list(residence_days.values()))
+    if not np.isnan(avg_residence) and total_water > 0:
+        daily_water = total_water / 7  # weekly → daily
+        result["wip_water_kg_estimate"] = daily_water * avg_residence
+    else:
+        result["wip_water_kg_estimate"] = 0
+    
+    logger.info(f"Weekly prediction: {total_wagons} wagons, {total_volume:.1f} m³, {total_water:.0f} kg water")
+    return result
+
+
 # =====================================================================
 # MAIN (for standalone testing)
 # =====================================================================
 def main():
     """Standalone execution for testing."""
-    # This is a placeholder for local testing
-    # The Streamlit app uses these functions with uploaded files
     logger.info("Module loaded successfully. Use from Streamlit app.")
 
 
 if __name__ == "__main__":
     main()
-
