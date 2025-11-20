@@ -5,7 +5,9 @@ import plotly.express as px
 from io import BytesIO
 import os
 
-# Import the KPI calculation module
+# ---------------------------------------------------------
+# Import KPI engine functions from backend module
+# ---------------------------------------------------------
 try:
     from dryer_kpi_monthly_final import (
         parse_energy,
@@ -18,10 +20,12 @@ try:
         CONFIG,
     )
 except ImportError:
-    st.error("❌ Unable to import dryer_kpi_monthly_final module")
+    st.error("❌ Unable to import dryer_kpi_monthly_final module. Check the file name and path.")
     st.stop()
 
-# ------------------ Page Configuration ------------------
+# ---------------------------------------------------------
+# Streamlit page configuration & CSS
+# ---------------------------------------------------------
 st.set_page_config(
     page_title="Lindner Dryer KPI Dashboard",
     page_icon="🏭",
@@ -29,7 +33,6 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ------------------ Custom CSS ------------------
 st.markdown(
     """
     <style>
@@ -80,7 +83,9 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# ------------------ Header ------------------
+# ---------------------------------------------------------
+# Header
+# ---------------------------------------------------------
 st.markdown(
     '<div class="main-title">🏭 Lindner – Dryer KPI Monitoring Dashboard</div>',
     unsafe_allow_html=True,
@@ -88,11 +93,13 @@ st.markdown(
 
 st.info(
     "📊 Upload your **Energy** and **Hordenwagen** files. "
-    "Water-loss curves are already embedded from the Wasserverlust file, "
-    "so kWh/kg and water KPIs are available without extra uploads."
+    "Water-loss behaviour is already embedded as product benchmarks, "
+    "so kWh/kg H₂O is computed automatically – no extra Wasserverlust file needed."
 )
 
-# ------------------ Sidebar ------------------
+# ---------------------------------------------------------
+# Sidebar – file upload & filters
+# ---------------------------------------------------------
 with st.sidebar:
     st.subheader("📁 Data Upload")
 
@@ -112,9 +119,9 @@ with st.sidebar:
 
     products = st.multiselect(
         "🧱 Product(s):",
-        ["L30", "L32", "L34", "L36", "L38", "L40", "N40", "N44", "Y44"],
+        ["L28", "L30", "L32", "L34", "L36", "L38", "L40", "L44", "N40", "N44", "Y44"],
         default=["L30", "L32", "L34", "L36", "L38", "L40", "N40"],
-        help="Select one or more products to analyze",
+        help="Select products to include in the analysis",
     )
 
     month = st.number_input(
@@ -122,82 +129,17 @@ with st.sidebar:
         min_value=0,
         max_value=12,
         value=0,
-        help="Filter by specific month (1–12) or 0 for all months",
+        help="Filter by month (1–12) or 0 for all months",
     )
 
     st.markdown("---")
     run_button = st.button("▶️ Run Analysis", use_container_width=True)
 
-
-def allocate_energy(e: pd.DataFrame, ivals: pd.DataFrame) -> pd.DataFrame:
-    """Allocate energy to products based on time overlap."""
-    results = []
-
-    for z_key, z_name in ZONE_ENERGY_MAPPING.items():
-        col = f"E_{z_name}_kWh"
-
-        e_zone = e[e[col] > 0].copy()
-        iv_zone = ivals[ivals["Zone"] == z_key].copy()
-
-        if e_zone.empty or iv_zone.empty:
-            continue
-
-        chunk = 1000
-        zone_res = []
-
-        for i in range(0, len(iv_zone), chunk):
-            part = iv_zone.iloc[i:i + chunk]
-
-            e_temp = e_zone.copy(); e_temp["_key"] = 1
-            p_temp = part.copy();  p_temp["_key"] = 1
-
-            merged = e_temp.merge(p_temp, on="_key")
-
-            # overlap filter
-            merged = merged[
-                (merged["P_end"] > merged["E_start"]) &
-                (merged["P_start"] < merged["E_end"])
-            ]
-
-            merged["latest_start"] = merged[["E_start", "P_start"]].max(axis=1)
-            merged["earliest_end"] = merged[["E_end", "P_end"]].min(axis=1)
-            merged["Overlap_h"] = (
-                (merged["earliest_end"] - merged["latest_start"])
-                .dt.total_seconds() / 3600
-            ).clip(lower=0)
-
-            merged = merged[merged["Overlap_h"] > 0]
-
-            # energy share
-            merged["Energy_share_kWh"] = merged[col] * merged["Overlap_h"]
-
-            # FIXED: Month_e removed – use "Month"
-            result = merged[[
-                "Month", 
-                "Produkt", 
-                "m3", 
-                "Overlap_h", 
-                "Energy_share_kWh"
-            ]].copy()
-
-            result["Zone"] = z_key
-            zone_res.append(result)
-
-        if zone_res:
-            results.append(pd.concat(zone_res, ignore_index=True))
-
-    if results:
-        return pd.concat(results, ignore_index=True)
-
-    return pd.DataFrame(
-        columns=["Month", "Produkt", "Zone", "Energy_share_kWh", "Overlap_h", "m3"]
-    )
-
-
-
-# ------------------ Helper Functions ------------------
-def create_kpi_card(title, value, unit):
-    """Render a nice KPI card."""
+# ---------------------------------------------------------
+# Helper functions
+# ---------------------------------------------------------
+def create_kpi_card(title: str, value, unit: str) -> str:
+    """Return HTML for a KPI card."""
     if value is None or pd.isna(value):
         text = "–"
         unit_str = ""
@@ -212,8 +154,8 @@ def create_kpi_card(title, value, unit):
     """
 
 
-def create_excel_download(results):
-    """Create Excel file in memory for download."""
+def create_excel_download(results: dict) -> BytesIO:
+    """Create an Excel file in memory with all result tables."""
     output = BytesIO()
     with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
         results["energy"].to_excel(writer, sheet_name="Energy_Data", index=False)
@@ -229,31 +171,32 @@ def create_excel_download(results):
     return output
 
 
-def run_analysis(energy_path, wagon_path, products_filter, month_filter):
+def run_analysis(
+    energy_path: str, wagon_path: str, products_filter, month_filter
+) -> dict:
     """
-    Orchestrates the whole analysis:
-
-    1. Parse energy & wagon data
-    2. Filter by product and month
-    3. Build zone intervals and allocate energy
-    4. Aggregate monthly and yearly KPIs
-    5. Add water-based KPIs (kWh/kg)
+    Orchestrate the full KPI calculation:
+    1. Parse energy & wagon files
+    2. Filter by product & month
+    3. Build zone intervals & allocate energy
+    4. Aggregate KPIs (kWh/m³)
+    5. Add water-based KPIs (kWh/kg) using built-in benchmarks
     """
-    progress_bar = st.progress(0)
-    status_text = st.empty()
+    progress = st.progress(0)
+    status = st.empty()
 
     try:
-        # --- Parse energy ---
-        status_text.text("🔄 Parsing energy data...")
-        progress_bar.progress(15)
+        # 1) Energy
+        status.text("🔄 Parsing energy data...")
+        progress.progress(15)
         e_raw = pd.read_excel(energy_path, sheet_name=CONFIG["energy_sheet"])
         e = parse_energy(e_raw)
         if e.empty:
-            raise ValueError("Energy data is empty after parsing")
+            raise ValueError("Parsed energy data is empty.")
 
-        # --- Parse wagons ---
-        status_text.text("🔄 Parsing wagon tracking data...")
-        progress_bar.progress(35)
+        # 2) Wagons
+        status.text("🔄 Parsing wagon tracking data...")
+        progress.progress(35)
         w_raw = pd.read_excel(
             wagon_path,
             sheet_name=CONFIG["wagon_sheet"],
@@ -261,40 +204,43 @@ def run_analysis(energy_path, wagon_path, products_filter, month_filter):
         )
         w = parse_wagon(w_raw)
         if w.empty:
-            raise ValueError("Wagon data is empty after parsing")
+            raise ValueError("Parsed wagon data is empty.")
 
-        # --- Filters ---
-        status_text.text("🔄 Applying filters...")
-        progress_bar.progress(50)
-
+        # 3) Filters
+        status.text("🔄 Applying filters...")
+        progress.progress(50)
         if products_filter:
             w = w[w["Produkt"].astype(str).isin(products_filter)]
             if w.empty:
-                raise ValueError(f"No wagons found for products: {products_filter}")
+                raise ValueError(
+                    f"No wagon records found for selected products: {products_filter}"
+                )
 
         if month_filter:
             e = e[e["Month"] == month_filter]
             w = w[w["Month"] == month_filter]
             if e.empty or w.empty:
-                raise ValueError(f"No data found for month: {month_filter}")
+                raise ValueError(
+                    f"No energy/wagon data found for month = {month_filter}."
+                )
 
-        # --- Intervals ---
-        status_text.text("🔄 Processing zone intervals...")
-        progress_bar.progress(65)
+        # 4) Intervals
+        status.text("🔄 Building zone intervals...")
+        progress.progress(65)
         ivals = explode_intervals(w)
         if ivals.empty:
-            raise ValueError("No valid zone intervals could be created")
+            raise ValueError("Zone intervals could not be created (empty result).")
 
-        # --- Allocation ---
-        status_text.text("🔄 Allocating energy to products...")
-        progress_bar.progress(80)
+        # 5) Allocation
+        status.text("🔄 Allocating energy to products...")
+        progress.progress(80)
         alloc = allocate_energy(e, ivals)
         if alloc.empty:
-            raise ValueError("Energy allocation produced no results")
+            raise ValueError("Energy allocation result is empty.")
 
-        # --- Summaries ---
-        status_text.text("🔄 Generating summaries...")
-        progress_bar.progress(90)
+        # 6) Summaries
+        status.text("🔄 Aggregating KPIs...")
+        progress.progress(90)
 
         summary = alloc.groupby(["Month", "Produkt", "Zone"], as_index=False).agg(
             Energy_kWh=("Energy_share_kWh", "sum"),
@@ -304,7 +250,7 @@ def run_analysis(energy_path, wagon_path, products_filter, month_filter):
             summary["Energy_kWh"] / summary["Volume_m3"].replace(0, pd.NA)
         )
 
-        # Add water-based KPIs using built-in benchmarks
+        # Add water-related KPIs
         summary = add_water_kpis(summary)
 
         yearly = summary.groupby(["Produkt", "Zone"], as_index=False).agg(
@@ -319,8 +265,8 @@ def run_analysis(energy_path, wagon_path, products_filter, month_filter):
             yearly["Energy_kWh"] / yearly["Water_kg"].replace(0, pd.NA)
         )
 
-        progress_bar.progress(100)
-        status_text.text("✅ Analysis complete!")
+        progress.progress(100)
+        status.text("✅ Analysis complete!")
 
         return {
             "energy": e,
@@ -335,17 +281,19 @@ def run_analysis(energy_path, wagon_path, products_filter, month_filter):
         import time
 
         time.sleep(0.4)
-        progress_bar.empty()
-        status_text.empty()
+        progress.empty()
+        status.empty()
 
 
-# ------------------ Session State ------------------
+# ---------------------------------------------------------
+# Session state initialisation
+# ---------------------------------------------------------
 if "results" not in st.session_state:
     st.session_state.results = None
 if "analysis_complete" not in st.session_state:
     st.session_state.analysis_complete = False
 
-# Clear results when files change
+# Reset when files change
 if energy_file and wagon_file:
     current_files = (energy_file.name, wagon_file.name)
     if "last_files" not in st.session_state:
@@ -355,61 +303,61 @@ if energy_file and wagon_file:
         st.session_state.analysis_complete = False
         st.session_state.last_files = current_files
 
-# ------------------ Run Button ------------------
+# ---------------------------------------------------------
+# Run analysis when button clicked
+# ---------------------------------------------------------
 if run_button:
     if not energy_file or not wagon_file:
-        st.error("⚠️ Please upload both Energy and Hordenwagen files.")
+        st.error("⚠️ Please upload both Energy and Hordenwagen files before running.")
     else:
-        tmp_e_path = None
-        tmp_w_path = None
+        tmp_e = None
+        tmp_w = None
 
         try:
-            # Save uploads as temp files
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp_e:
-                tmp_e.write(energy_file.read())
-                tmp_e_path = tmp_e.name
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as f_e:
+                f_e.write(energy_file.read())
+                tmp_e = f_e.name
 
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsm") as tmp_w:
-                tmp_w.write(wagon_file.read())
-                tmp_w_path = tmp_w.name
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsm") as f_w:
+                f_w.write(wagon_file.read())
+                tmp_w = f_w.name
 
-            # Run analysis
             results = run_analysis(
-                tmp_e_path,
-                tmp_w_path,
+                tmp_e,
+                tmp_w,
                 products if products else None,
                 month if month != 0 else None,
             )
-
             st.session_state.results = results
             st.session_state.analysis_complete = True
 
-        except Exception as exc:
-            st.error(f"❌ Error during analysis: {exc}")
+        except Exception as err:
+            st.error(f"❌ Error during analysis: {err}")
             with st.expander("🔍 View Error Details"):
-                st.exception(exc)
+                st.exception(err)
             st.session_state.results = None
             st.session_state.analysis_complete = False
 
         finally:
-            # Cleanup
-            for p in (tmp_e_path, tmp_w_path):
+            for p in (tmp_e, tmp_w):
                 if p and os.path.exists(p):
                     try:
                         os.unlink(p)
                     except:
                         pass
 
-# ------------------ Display Results ------------------
+# ---------------------------------------------------------
+# Show results
+# ---------------------------------------------------------
 if st.session_state.analysis_complete and st.session_state.results:
     results = st.session_state.results
     summary = results["summary"]
     yearly = results["yearly"]
 
     if summary.empty:
-        st.warning("⚠️ No data found with the selected filters.")
+        st.warning("⚠️ No data available after filtering.")
     else:
-        # ===== KPI CARDS =====
+        # ---------------- KPI CARDS ----------------
         st.markdown(
             '<div class="section-header">📈 Summary KPIs</div>',
             unsafe_allow_html=True,
@@ -444,13 +392,12 @@ if st.session_state.analysis_complete and st.session_state.results:
                 unsafe_allow_html=True,
             )
 
-        # ===== Monthly KPI Trends =====
+        # ---------------- Monthly KPI Trends ----------------
         st.markdown(
             '<div class="section-header">📊 Monthly KPI Trends</div>',
             unsafe_allow_html=True,
         )
 
-        # kWh/m³ vs month
         fig_kwh_m3 = px.line(
             summary,
             x="Month",
@@ -465,7 +412,6 @@ if st.session_state.analysis_complete and st.session_state.results:
         )
         st.plotly_chart(fig_kwh_m3, use_container_width=True)
 
-        # kWh/kg vs month
         if "kWh_per_kg" in summary.columns:
             fig_kwh_kg = px.line(
                 summary,
@@ -484,7 +430,7 @@ if st.session_state.analysis_complete and st.session_state.results:
             )
             st.plotly_chart(fig_kwh_kg, use_container_width=True)
 
-        # ===== Zone Comparison =====
+        # ---------------- Zone Comparison ----------------
         st.markdown(
             '<div class="section-header">📉 Zone Comparison</div>',
             unsafe_allow_html=True,
@@ -513,7 +459,7 @@ if st.session_state.analysis_complete and st.session_state.results:
             fig_pie.update_layout(height=400)
             st.plotly_chart(fig_pie, use_container_width=True)
 
-        # ===== Water Benchmarks per Product =====
+        # ---------------- Water Benchmarks ----------------
         st.markdown(
             '<div class="section-header">💧 Water Benchmarks per Product</div>',
             unsafe_allow_html=True,
@@ -540,7 +486,7 @@ if st.session_state.analysis_complete and st.session_state.results:
         fig_bench.update_layout(height=400, plot_bgcolor="white")
         st.plotly_chart(fig_bench, use_container_width=True)
 
-        # ===== Detailed Tables =====
+        # ---------------- Detailed Tables ----------------
         with st.expander("📋 View Detailed Data Tables"):
             tab1, tab2 = st.tabs(["Monthly Summary", "Yearly Summary"])
 
@@ -564,59 +510,46 @@ if st.session_state.analysis_complete and st.session_state.results:
                 }
                 st.dataframe(yearly.style.format(fmt_y), use_container_width=True)
 
-        # ===== Prediction Helper =====
+        # ---------------- Prediction Helper ----------------
         st.markdown(
-            '<div class="section-header">🔮 Simple Prediction Helper</div>',
+            '<div class="section-header">🔮 Prediction Helper (Planned Mix)</div>',
             unsafe_allow_html=True,
         )
 
         st.write(
             "Use the embedded water benchmarks and your measured KPIs "
-            "to estimate water load and energy for a planned product mix."
+            "to estimate water load and energy for a planned daily product mix."
         )
 
         with st.form("prediction_form"):
-            st.write("### Define planned daily volume per product (m³/day)")
+            st.write("### Planned daily volume per product (m³/day)")
             pred_volumes = {}
-            col_pred1, col_pred2, col_pred3 = st.columns(3)
-            product_list = ["L30", "L32", "L34", "L36", "L38", "L40", "N40", "N44", "Y44"]
+            col_p1, col_p2, col_p3 = st.columns(3)
+            prod_list = ["L28", "L30", "L32", "L34", "L36", "L38", "L40", "L44", "N40", "N44", "Y44"]
+            blocks = [prod_list[0:4], prod_list[4:8], prod_list[8:11]]
 
-            # Split into columns just for nicer layout
-            col_lists = [
-                product_list[0:3],
-                product_list[3:6],
-                product_list[6:9],
-            ]
-            for col, plist in zip([col_pred1, col_pred2, col_pred3], col_lists):
+            for col, plist in zip([col_p1, col_p2, col_p3], blocks):
                 with col:
                     for p in plist:
                         pred_volumes[p] = st.number_input(
-                            f"{p} [m³/day]",
-                            min_value=0.0,
-                            value=0.0,
-                            step=10.0,
+                            f"{p} [m³/day]", min_value=0.0, value=0.0, step=10.0
                         )
 
             st.write("### Baseline KPIs for prediction")
-            # From the measured data: overall average
-            overall_kwh_m3 = avg_kwh_m3
-            overall_kwh_kg = avg_kwh_kg
-
             baseline_kwh_m3 = st.number_input(
-                "Baseline kWh/m³ (leave as default to use measured avg)",
+                "Baseline kWh/m³ (default: measured avg)",
                 min_value=0.0,
-                value=float(overall_kwh_m3) if not pd.isna(overall_kwh_m3) else 0.0,
+                value=float(avg_kwh_m3) if not pd.isna(avg_kwh_m3) else 0.0,
             )
             baseline_kwh_kg = st.number_input(
-                "Baseline kWh/kg (leave as default to use measured avg)",
+                "Baseline kWh/kg (default: measured avg)",
                 min_value=0.0,
-                value=float(overall_kwh_kg) if not pd.isna(overall_kwh_kg) else 0.0,
+                value=float(avg_kwh_kg) if not pd.isna(avg_kwh_kg) else 0.0,
             )
 
             submitted = st.form_submit_button("Calculate Prediction")
 
         if submitted:
-            # Use the helper from the KPI module
             pred_result = predict_mix_energy(
                 product_mix_m3=pred_volumes,
                 baseline_kwh_per_m3=baseline_kwh_m3 or None,
@@ -624,38 +557,35 @@ if st.session_state.analysis_complete and st.session_state.results:
             )
 
             st.write("#### Prediction Results")
-            colr1, colr2, colr3 = st.columns(3)
-            with colr1:
+            r1, r2, r3 = st.columns(3)
+            with r1:
                 st.metric(
                     "Total Volume (m³/day)",
                     f"{pred_result['total_volume_m3']:,.2f}",
                 )
-            with colr2:
+            with r2:
                 st.metric(
                     "Total Water (kg/day)",
                     f"{pred_result['total_water_kg']:,.2f}",
                 )
-            with colr3:
+            with r3:
                 st.metric(
                     "Mean Water per m³ (kg/m³)",
                     f"{pred_result['mean_water_per_m3']:,.2f}",
                 )
 
-            # Show energy predictions if available
             if "energy_from_kwh_per_m3" in pred_result:
                 st.write(
-                    f"**Predicted Energy (kWh/day) "
-                    f"based on kWh/m³:** "
+                    f"**Predicted Energy (kWh/day) from kWh/m³:** "
                     f"{pred_result['energy_from_kwh_per_m3']:,.0f} kWh"
                 )
             if "energy_from_kwh_per_kg" in pred_result:
                 st.write(
-                    f"**Predicted Energy (kWh/day) "
-                    f"based on kWh/kg:** "
+                    f"**Predicted Energy (kWh/day) from kWh/kg:** "
                     f"{pred_result['energy_from_kwh_per_kg']:,.0f} kWh"
                 )
 
-        # ===== Export =====
+        # ---------------- Export ----------------
         st.markdown(
             '<div class="section-header">📥 Export Results</div>',
             unsafe_allow_html=True,
@@ -673,10 +603,4 @@ if st.session_state.analysis_complete and st.session_state.results:
             use_container_width=True,
         )
 
-        st.success("✅ Analysis complete! Explore the charts or download the report.")
-
-        return pd.DataFrame(columns=["Month", "Produkt", "Zone", "Energy_share_kWh", "Overlap_h", "m3"])
-
-
-
-
+        st.success("✅ Analysis complete! You can explore the visualizations above or download the full report.")
