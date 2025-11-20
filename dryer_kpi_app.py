@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import tempfile
 import plotly.express as px
+import plotly.graph_objects as go
 from io import BytesIO
 import os
 
@@ -14,6 +15,10 @@ try:
         allocate_energy,
         add_water_kpis,
         predict_mix_energy,
+        parse_waterloss,
+        calculate_waterloss_metrics,
+        merge_energy_water_actual,
+        compute_water_kpis,
         WATER_PER_M3_KG,
         CONFIG,
     )
@@ -87,9 +92,8 @@ st.markdown(
 )
 
 st.info(
-    "📊 Upload your **Energy** and **Hordenwagen** files. "
-    "Water-loss curves are already embedded from the Wasserverlust file, "
-    "so kWh/kg and water KPIs are available without extra uploads."
+    "📊 Upload your **Energy** and **Hordenwagen** files (required). "
+    "Optionally upload **Water-Loss** measurements to compare against embedded benchmarks."
 )
 
 # ------------------ Sidebar ------------------
@@ -106,13 +110,18 @@ with st.sidebar:
         type=["xlsm", "xlsx"],
         help="Upload the wagon tracking Excel file",
     )
+    water_file = st.file_uploader(
+        "💧 Water-Loss File (.xlsx) - Optional",
+        type=["xlsx"],
+        help="Upload water-loss measurement file to compare against benchmarks",
+    )
 
     st.markdown("---")
     st.subheader("⚙️ Filters")
 
     products = st.multiselect(
         "🧱 Product(s):",
-        ["L30", "L32", "L34", "L36", "L38", "L40", "N40", "N44", "Y44"],
+        ["L28", "L30", "L32", "L34", "L36", "L38", "L40", "L44", "N40", "N44", "Y44"],
         default=["L30", "L32", "L34", "L36", "L38", "L40", "N40"],
         help="Select one or more products to analyze",
     )
@@ -158,20 +167,32 @@ def create_excel_download(results):
         )
         results["summary"].to_excel(writer, sheet_name="Monthly_Summary", index=False)
         results["yearly"].to_excel(writer, sheet_name="Yearly_Summary", index=False)
+        
+        # Add water-loss sheets if available
+        if results.get("waterloss_raw") is not None:
+            results["waterloss_raw"].to_excel(
+                writer, sheet_name="Waterloss_Measurements", index=False
+            )
+        
+        if results.get("water_kpis") is not None:
+            kpis = results["water_kpis"]
+            kpis["product"].to_excel(
+                writer, sheet_name="Water_KPIs_by_Product", index=False
+            )
+            kpis["monthly"].to_excel(
+                writer, sheet_name="Water_KPIs_by_Month", index=False
+            )
+            kpis["comparison"].to_excel(
+                writer, sheet_name="Measured_vs_Benchmark", index=False
+            )
 
     output.seek(0)
     return output
 
 
-def run_analysis(energy_path, wagon_path, products_filter, month_filter):
+def run_analysis(energy_path, wagon_path, water_path, products_filter, month_filter):
     """
-    Orchestrates the whole analysis:
-
-    1. Parse energy & wagon data
-    2. Filter by product and month
-    3. Build zone intervals and allocate energy
-    4. Aggregate monthly and yearly KPIs
-    5. Add water-based KPIs (kWh/kg)
+    Orchestrates the whole analysis including water-loss integration.
     """
     progress_bar = st.progress(0)
     status_text = st.empty()
@@ -179,7 +200,7 @@ def run_analysis(energy_path, wagon_path, products_filter, month_filter):
     try:
         # --- Parse energy ---
         status_text.text("🔄 Parsing energy data...")
-        progress_bar.progress(15)
+        progress_bar.progress(10)
         e_raw = pd.read_excel(energy_path, sheet_name=CONFIG["energy_sheet"])
         e = parse_energy(e_raw)
         if e.empty:
@@ -187,7 +208,7 @@ def run_analysis(energy_path, wagon_path, products_filter, month_filter):
 
         # --- Parse wagons ---
         status_text.text("🔄 Parsing wagon tracking data...")
-        progress_bar.progress(35)
+        progress_bar.progress(25)
         w_raw = pd.read_excel(
             wagon_path,
             sheet_name=CONFIG["wagon_sheet"],
@@ -197,34 +218,61 @@ def run_analysis(energy_path, wagon_path, products_filter, month_filter):
         if w.empty:
             raise ValueError("Wagon data is empty after parsing")
 
+        # --- Parse water-loss (if provided) ---
+        water_df = None
+        water_kpis = None
+        if water_path:
+            status_text.text("🔄 Parsing water-loss measurements...")
+            progress_bar.progress(35)
+            water_raw = pd.read_excel(water_path)
+            water_parsed = parse_waterloss(water_raw)
+            water_df = calculate_waterloss_metrics(water_parsed)
+
         # --- Filters ---
         status_text.text("🔄 Applying filters...")
-        progress_bar.progress(50)
+        progress_bar.progress(45)
 
         if products_filter:
             w = w[w["Produkt"].astype(str).isin(products_filter)]
             if w.empty:
                 raise ValueError(f"No wagons found for products: {products_filter}")
+            if water_df is not None:
+                water_df = water_df[water_df["Produkt"].astype(str).isin(products_filter)]
 
         if month_filter:
             e = e[e["Month"] == month_filter]
             w = w[w["Month"] == month_filter]
+            if water_df is not None:
+                water_df = water_df[water_df["Month"] == month_filter]
             if e.empty or w.empty:
                 raise ValueError(f"No data found for month: {month_filter}")
 
         # --- Intervals ---
         status_text.text("🔄 Processing zone intervals...")
-        progress_bar.progress(65)
+        progress_bar.progress(55)
         ivals = explode_intervals(w)
         if ivals.empty:
             raise ValueError("No valid zone intervals could be created")
 
         # --- Allocation ---
         status_text.text("🔄 Allocating energy to products...")
-        progress_bar.progress(80)
+        progress_bar.progress(70)
         alloc = allocate_energy(e, ivals)
         if alloc.empty:
             raise ValueError("Energy allocation produced no results")
+
+        # --- Merge with water-loss ---
+        if water_df is not None and not water_df.empty:
+            status_text.text("🔄 Merging with water-loss data...")
+            progress_bar.progress(80)
+            alloc = merge_energy_water_actual(alloc, water_df)
+            water_kpis = compute_water_kpis(alloc)
+        else:
+            # Use benchmarks only
+            alloc['water_per_m3_benchmark'] = (
+                alloc['Produkt'].astype(str).map(WATER_PER_M3_KG)
+            )
+            alloc['Water_kg'] = alloc['m3'] * alloc['water_per_m3_benchmark']
 
         # --- Summaries ---
         status_text.text("🔄 Generating summaries...")
@@ -233,13 +281,14 @@ def run_analysis(energy_path, wagon_path, products_filter, month_filter):
         summary = alloc.groupby(["Month", "Produkt", "Zone"], as_index=False).agg(
             Energy_kWh=("Energy_share_kWh", "sum"),
             Volume_m3=("m3", "sum"),
+            Water_kg=("Water_kg", "sum"),
         )
         summary["kWh_per_m3"] = (
             summary["Energy_kWh"] / summary["Volume_m3"].replace(0, pd.NA)
         )
-
-        # Add water-based KPIs using built-in benchmarks
-        summary = add_water_kpis(summary)
+        summary["kWh_per_kg"] = (
+            summary["Energy_kWh"] / summary["Water_kg"].replace(0, pd.NA)
+        )
 
         yearly = summary.groupby(["Produkt", "Zone"], as_index=False).agg(
             Energy_kWh=("Energy_kWh", "sum"),
@@ -263,6 +312,8 @@ def run_analysis(energy_path, wagon_path, products_filter, month_filter):
             "allocation": alloc,
             "summary": summary,
             "yearly": yearly,
+            "waterloss_raw": water_df,
+            "water_kpis": water_kpis,
         }
 
     finally:
@@ -280,14 +331,17 @@ if "analysis_complete" not in st.session_state:
     st.session_state.analysis_complete = False
 
 # Clear results when files change
-if energy_file and wagon_file:
-    current_files = (energy_file.name, wagon_file.name)
-    if "last_files" not in st.session_state:
-        st.session_state.last_files = current_files
-    elif st.session_state.last_files != current_files:
-        st.session_state.results = None
-        st.session_state.analysis_complete = False
-        st.session_state.last_files = current_files
+current_files = (
+    energy_file.name if energy_file else None,
+    wagon_file.name if wagon_file else None,
+    water_file.name if water_file else None,
+)
+if "last_files" not in st.session_state:
+    st.session_state.last_files = current_files
+elif st.session_state.last_files != current_files:
+    st.session_state.results = None
+    st.session_state.analysis_complete = False
+    st.session_state.last_files = current_files
 
 # ------------------ Run Button ------------------
 if run_button:
@@ -296,6 +350,7 @@ if run_button:
     else:
         tmp_e_path = None
         tmp_w_path = None
+        tmp_water_path = None
 
         try:
             # Save uploads as temp files
@@ -307,10 +362,16 @@ if run_button:
                 tmp_w.write(wagon_file.read())
                 tmp_w_path = tmp_w.name
 
+            if water_file:
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp_water:
+                    tmp_water.write(water_file.read())
+                    tmp_water_path = tmp_water.name
+
             # Run analysis
             results = run_analysis(
                 tmp_e_path,
                 tmp_w_path,
+                tmp_water_path,
                 products if products else None,
                 month if month != 0 else None,
             )
@@ -327,7 +388,7 @@ if run_button:
 
         finally:
             # Cleanup
-            for p in (tmp_e_path, tmp_w_path):
+            for p in (tmp_e_path, tmp_w_path, tmp_water_path):
                 if p and os.path.exists(p):
                     try:
                         os.unlink(p)
@@ -339,6 +400,8 @@ if st.session_state.analysis_complete and st.session_state.results:
     results = st.session_state.results
     summary = results["summary"]
     yearly = results["yearly"]
+    water_kpis = results.get("water_kpis")
+    water_raw = results.get("waterloss_raw")
 
     if summary.empty:
         st.warning("⚠️ No data found with the selected filters.")
@@ -356,7 +419,7 @@ if st.session_state.analysis_complete and st.session_state.results:
         avg_kwh_m3 = yearly["kWh_per_m3"].mean()
         avg_kwh_kg = yearly["kWh_per_kg"].mean()
 
-        c1, c2, c3, c4 = st.columns(4)
+        c1, c2, c3, c4, c5 = st.columns(5)
         with c1:
             st.markdown(
                 create_kpi_card("Total Energy", total_energy, "kWh"),
@@ -374,9 +437,106 @@ if st.session_state.analysis_complete and st.session_state.results:
             )
         with c4:
             st.markdown(
-                create_kpi_card("Avg. Spec. Energy", avg_kwh_kg, "kWh/kg"),
+                create_kpi_card("Avg. kWh/m³", avg_kwh_m3, "kWh/m³"),
                 unsafe_allow_html=True,
             )
+        with c5:
+            st.markdown(
+                create_kpi_card("Avg. kWh/kg", avg_kwh_kg, "kWh/kg"),
+                unsafe_allow_html=True,
+            )
+
+        # ===== WATER-LOSS ANALYSIS (if measurements provided) =====
+        if water_kpis and water_raw is not None:
+            st.markdown(
+                '<div class="section-header">💧 Water-Loss Analysis (Measured vs. Benchmark)</div>',
+                unsafe_allow_html=True,
+            )
+            
+            # Show data source info
+            if 'water_source' in results['allocation'].columns:
+                source_counts = results['allocation']['water_source'].value_counts()
+                st.info(
+                    f"**Data sources:** "
+                    f"Measured: {source_counts.get('measured', 0)} | "
+                    f"Product Avg: {source_counts.get('product_average', 0)} | "
+                    f"Benchmark: {source_counts.get('benchmark', 0)}"
+                )
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                # Water loss distribution
+                valid_water = water_raw[water_raw['is_valid']]
+                if not valid_water.empty:
+                    fig_water_dist = px.box(
+                        valid_water,
+                        x="Produkt",
+                        y="water_per_m3_measured",
+                        color="Produkt",
+                        title="Water Loss Distribution by Product (Measured)",
+                        labels={"water_per_m3_measured": "Water per m³ (kg/m³)"}
+                    )
+                    fig_water_dist.update_layout(height=400, plot_bgcolor="white", showlegend=False)
+                    st.plotly_chart(fig_water_dist, use_container_width=True)
+            
+            with col2:
+                # Measured vs Benchmark comparison
+                comparison = water_kpis['comparison']
+                
+                # Create comparison chart
+                fig_compare = go.Figure()
+                fig_compare.add_trace(go.Bar(
+                    name='Measured',
+                    x=comparison['Produkt'],
+                    y=comparison['avg_water_per_m3_measured'],
+                    marker_color='lightblue'
+                ))
+                fig_compare.add_trace(go.Bar(
+                    name='Benchmark',
+                    x=comparison['Produkt'],
+                    y=comparison['water_per_m3_benchmark'],
+                    marker_color='navy'
+                ))
+                fig_compare.update_layout(
+                    title="Measured vs. Benchmark Water Density",
+                    yaxis_title="Water per m³ (kg/m³)",
+                    height=400,
+                    plot_bgcolor="white",
+                    barmode='group'
+                )
+                st.plotly_chart(fig_compare, use_container_width=True)
+            
+            # Deviation analysis
+            st.markdown("#### Deviation from Benchmarks")
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                fig_deviation = px.bar(
+                    comparison.dropna(subset=['water_deviation_pct']),
+                    x="Produkt",
+                    y="water_deviation_pct",
+                    color="water_deviation_pct",
+                    color_continuous_scale=['green', 'yellow', 'red'],
+                    color_continuous_midpoint=0,
+                    title="Deviation from Benchmark (%)",
+                    labels={"water_deviation_pct": "Deviation (%)"}
+                )
+                fig_deviation.update_layout(height=400, plot_bgcolor="white")
+                st.plotly_chart(fig_deviation, use_container_width=True)
+            
+            with col2:
+                # Water loss percentage by product
+                fig_water_pct = px.bar(
+                    water_kpis['product'],
+                    x="Produkt",
+                    y="avg_kwh_per_kg",
+                    title="Specific Energy Consumption by Product",
+                    labels={"avg_kwh_per_kg": "kWh/kg water"},
+                    text_auto=".2f"
+                )
+                fig_water_pct.update_layout(height=400, plot_bgcolor="white")
+                st.plotly_chart(fig_water_pct, use_container_width=True)
 
         # ===== Monthly KPI Trends =====
         st.markdown(
@@ -384,23 +544,26 @@ if st.session_state.analysis_complete and st.session_state.results:
             unsafe_allow_html=True,
         )
 
-        # kWh/m³ vs month
-        fig_kwh_m3 = px.line(
-            summary,
-            x="Month",
-            y="kWh_per_m3",
-            color="Zone",
-            markers=True,
-            hover_data=["Produkt", "Energy_kWh", "Volume_m3"],
-            title="Energy Efficiency by Month & Zone (kWh/m³)",
-        )
-        fig_kwh_m3.update_layout(
-            height=450, xaxis_title="Month", yaxis_title="kWh/m³", plot_bgcolor="white"
-        )
-        st.plotly_chart(fig_kwh_m3, use_container_width=True)
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            # kWh/m³ vs month
+            fig_kwh_m3 = px.line(
+                summary,
+                x="Month",
+                y="kWh_per_m3",
+                color="Zone",
+                markers=True,
+                hover_data=["Produkt", "Energy_kWh", "Volume_m3"],
+                title="Energy Efficiency (kWh/m³) by Month & Zone",
+            )
+            fig_kwh_m3.update_layout(
+                height=400, xaxis_title="Month", yaxis_title="kWh/m³", plot_bgcolor="white"
+            )
+            st.plotly_chart(fig_kwh_m3, use_container_width=True)
 
-        # kWh/kg vs month
-        if "kWh_per_kg" in summary.columns:
+        with col2:
+            # kWh/kg vs month
             fig_kwh_kg = px.line(
                 summary,
                 x="Month",
@@ -408,10 +571,10 @@ if st.session_state.analysis_complete and st.session_state.results:
                 color="Zone",
                 markers=True,
                 hover_data=["Produkt", "Energy_kWh", "Water_kg"],
-                title="Specific Energy by Month & Zone (kWh/kg H₂O)",
+                title="Specific Energy (kWh/kg H₂O) by Month & Zone",
             )
             fig_kwh_kg.update_layout(
-                height=450,
+                height=400,
                 xaxis_title="Month",
                 yaxis_title="kWh/kg",
                 plot_bgcolor="white",
@@ -447,9 +610,9 @@ if st.session_state.analysis_complete and st.session_state.results:
             fig_pie.update_layout(height=400)
             st.plotly_chart(fig_pie, use_container_width=True)
 
-        # ===== Water Benchmarks per Product =====
+        # ===== Water Benchmarks Reference =====
         st.markdown(
-            '<div class="section-header">💧 Water Benchmarks per Product</div>',
+            '<div class="section-header">💧 Water Benchmark Reference</div>',
             unsafe_allow_html=True,
         )
 
@@ -476,50 +639,78 @@ if st.session_state.analysis_complete and st.session_state.results:
 
         # ===== Detailed Tables =====
         with st.expander("📋 View Detailed Data Tables"):
-            tab1, tab2 = st.tabs(["Monthly Summary", "Yearly Summary"])
+            if water_kpis:
+                tabs = st.tabs([
+                    "Monthly Summary", 
+                    "Yearly Summary",
+                    "Water KPIs by Product",
+                    "Measured vs Benchmark"
+                ])
+            else:
+                tabs = st.tabs(["Monthly Summary", "Yearly Summary"])
 
-            with tab1:
+            with tabs[0]:
                 fmt = {
                     "Energy_kWh": "{:.2f}",
                     "Volume_m3": "{:.2f}",
-                    "kWh_per_m3": "{:.2f}",
                     "Water_kg": "{:.2f}",
+                    "kWh_per_m3": "{:.2f}",
                     "kWh_per_kg": "{:.2f}",
                 }
                 st.dataframe(summary.style.format(fmt), use_container_width=True)
 
-            with tab2:
+            with tabs[1]:
                 fmt_y = {
                     "Energy_kWh": "{:.2f}",
                     "Volume_m3": "{:.2f}",
-                    "kWh_per_m3": "{:.2f}",
                     "Water_kg": "{:.2f}",
+                    "kWh_per_m3": "{:.2f}",
                     "kWh_per_kg": "{:.2f}",
                 }
                 st.dataframe(yearly.style.format(fmt_y), use_container_width=True)
+            
+            if water_kpis:
+                with tabs[2]:
+                    st.dataframe(
+                        water_kpis['product'].style.format({
+                            col: "{:.2f}" for col in water_kpis['product'].columns 
+                            if col != 'Produkt'
+                        }),
+                        use_container_width=True
+                    )
+                
+                with tabs[3]:
+                    st.dataframe(
+                        water_kpis['comparison'].style.format({
+                            "avg_water_per_m3_measured": "{:.2f}",
+                            "water_per_m3_benchmark": "{:.2f}",
+                            "water_deviation_pct": "{:+.1f}%"
+                        }),
+                        use_container_width=True
+                    )
 
         # ===== Prediction Helper =====
         st.markdown(
-            '<div class="section-header">🔮 Simple Prediction Helper</div>',
+            '<div class="section-header">🔮 Production Planning Helper</div>',
             unsafe_allow_html=True,
         )
 
         st.write(
-            "Use the embedded water benchmarks and your measured KPIs "
-            "to estimate water load and energy for a planned product mix."
+            "Estimate energy requirements for a planned production mix using "
+            "measured KPIs or benchmarks."
         )
 
         with st.form("prediction_form"):
             st.write("### Define planned daily volume per product (m³/day)")
             pred_volumes = {}
             col_pred1, col_pred2, col_pred3 = st.columns(3)
-            product_list = ["L30", "L32", "L34", "L36", "L38", "L40", "N40", "N44", "Y44"]
+            product_list = list(WATER_PER_M3_KG.keys())
 
-            # Split into columns just for nicer layout
+            # Split into columns
             col_lists = [
-                product_list[0:3],
-                product_list[3:6],
-                product_list[6:9],
+                product_list[0:4],
+                product_list[4:8],
+                product_list[8:],
             ]
             for col, plist in zip([col_pred1, col_pred2, col_pred3], col_lists):
                 with col:
@@ -532,25 +723,20 @@ if st.session_state.analysis_complete and st.session_state.results:
                         )
 
             st.write("### Baseline KPIs for prediction")
-            # From the measured data: overall average
-            overall_kwh_m3 = avg_kwh_m3
-            overall_kwh_kg = avg_kwh_kg
-
             baseline_kwh_m3 = st.number_input(
-                "Baseline kWh/m³ (leave as default to use measured avg)",
+                "Baseline kWh/m³ (use measured average)",
                 min_value=0.0,
-                value=float(overall_kwh_m3) if not pd.isna(overall_kwh_m3) else 0.0,
+                value=float(avg_kwh_m3) if not pd.isna(avg_kwh_m3) else 0.0,
             )
             baseline_kwh_kg = st.number_input(
-                "Baseline kWh/kg (leave as default to use measured avg)",
+                "Baseline kWh/kg (use measured average)",
                 min_value=0.0,
-                value=float(overall_kwh_kg) if not pd.isna(overall_kwh_kg) else 0.0,
+                value=float(avg_kwh_kg) if not pd.isna(avg_kwh_kg) else 0.0,
             )
 
             submitted = st.form_submit_button("Calculate Prediction")
 
         if submitted:
-            # Use the helper from the KPI module
             pred_result = predict_mix_energy(
                 product_mix_m3=pred_volumes,
                 baseline_kwh_per_m3=baseline_kwh_m3 or None,
@@ -571,22 +757,19 @@ if st.session_state.analysis_complete and st.session_state.results:
                 )
             with colr3:
                 st.metric(
-                    "Mean Water per m³ (kg/m³)",
+                    "Mean Water Density (kg/m³)",
                     f"{pred_result['mean_water_per_m3']:,.2f}",
                 )
 
-            # Show energy predictions if available
             if "energy_from_kwh_per_m3" in pred_result:
-                st.write(
-                    f"**Predicted Energy (kWh/day) "
-                    f"based on kWh/m³:** "
-                    f"{pred_result['energy_from_kwh_per_m3']:,.0f} kWh"
+                st.success(
+                    f"**Predicted Energy (from kWh/m³):** "
+                    f"{pred_result['energy_from_kwh_per_m3']:,.0f} kWh/day"
                 )
             if "energy_from_kwh_per_kg" in pred_result:
-                st.write(
-                    f"**Predicted Energy (kWh/day) "
-                    f"based on kWh/kg:** "
-                    f"{pred_result['energy_from_kwh_per_kg']:,.0f} kWh"
+                st.success(
+                    f"**Predicted Energy (from kWh/kg):** "
+                    f"{pred_result['energy_from_kwh_per_kg']:,.0f} kWh/day"
                 )
 
         # ===== Export =====
@@ -599,7 +782,7 @@ if st.session_state.analysis_complete and st.session_state.results:
         st.download_button(
             label="📥 Download Complete Excel Report",
             data=excel_data,
-            file_name="Dryer_KPI_Analysis.xlsx",
+            file_name="Dryer_KPI_Analysis_with_WaterLoss.xlsx",
             mime=(
                 "application/vnd.openxmlformats-officedocument."
                 "spreadsheetml.sheet"
@@ -608,3 +791,12 @@ if st.session_state.analysis_complete and st.session_state.results:
         )
 
         st.success("✅ Analysis complete! Explore the charts or download the report.")
+
+# Add clear results button
+if st.session_state.get('analysis_complete', False):
+    with st.sidebar:
+        st.markdown("---")
+        if st.button("🗑️ Clear Results", use_container_width=True):
+            st.session_state.results = None
+            st.session_state.analysis_complete = False
+            st.rerun()
