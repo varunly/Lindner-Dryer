@@ -512,114 +512,129 @@ if st.session_state.analysis_complete and st.session_state.results:
                 }
                 st.dataframe(yearly.style.format(fmt_y), use_container_width=True)
 
-        # ---------------- Prediction Helper ----------------
-        # ---------------------------------------------------------
-# 🔮 WEEKLY PREDICTION — WAGONS PER WEEK
-# ---------------------------------------------------------
-st.markdown('<div class="section-header">🔮 Weekly Energy Prediction (Wagons/Week)</div>',
-            unsafe_allow_html=True)
-
-st.write(
-    "Enter your weekly production plan in **wagons per product per week**. "
-    "The system will automatically convert wagons → m³ → water load → energy."
-)
-
-# --- Compute wagon capacities & residence times ---
-wagon_stats = compute_product_wagon_stats(results["wagons"])
-wagon_capacity = wagon_stats["wagon_capacity_m3"]
-residence_days = wagon_stats["residence_days"]
-
-# --- UI form ---
-with st.form("weekly_prediction_form"):
-
-    st.write("### Planned Wagons per Week")
-    planned_wagons = {}
-
-    # Split products into 3 columns
-    prod_left  = ["L28", "L30", "L32", "L34"]
-    prod_mid   = ["L36", "L38", "L40", "L44"]
-    prod_right = ["N40", "N44", "Y44"]
-
-    col1, col2, col3 = st.columns(3)
-
-    with col1:
-        for p in prod_left:
-            planned_wagons[p] = st.number_input(
-                f"{p} wagons/week", min_value=0, value=0, step=10)
-
-    with col2:
-        for p in prod_mid:
-            planned_wagons[p] = st.number_input(
-                f"{p} wagons/week", min_value=0, value=0, step=10)
-
-    with col3:
-        for p in prod_right:
-            planned_wagons[p] = st.number_input(
-                f"{p} wagons/week", min_value=0, value=0, step=10)
-
-    st.write("### Baseline KPIs")
-    base_kwh_m3 = st.number_input(
-        "Baseline kWh/m³ (default: measured avg)",
-        min_value=0.0,
-        value=float(yearly["kWh_per_m3"].mean())
-    )
-    base_kwh_kg = st.number_input(
-        "Baseline kWh/kg (default: measured avg)",
-        min_value=0.0,
-        value=float(yearly["kWh_per_kg"].mean())
-    )
-
-    submitted_weekly = st.form_submit_button("Predict Weekly Energy")
-
-
-# --- Process weekly prediction ---
-    if submitted_weekly:
-    
-        pred_week = predict_weekly_energy_from_wagons(
-            product_wagons_per_week=planned_wagons,
-            wagons_df=results["wagons"],
-            baseline_kwh_per_m3=base_kwh_m3,
-            baseline_kwh_per_kg=base_kwh_kg,
+       
+        # 🔮 WEEKLY PREDICTION — WAGONS PER WEEK
+                # ---------------- Weekly Prediction Helper ----------------
+        st.markdown(
+            '<div class="section-header">🔮 Weekly Energy Prediction (Wagons/Week)</div>',
+            unsafe_allow_html=True,
         )
-    
-        st.subheader("📊 Weekly Prediction Results")
-    
-        r1, r2, r3 = st.columns(3)
-        with r1:
-            st.metric("Total Wagons/Week", f"{pred_week['total_wagons_week']:,}")
-        with r2:
-            st.metric("Total Volume (m³/week)", f"{pred_week['total_volume_m3_week']:,.2f}")
-        with r3:
-            st.metric("Total Water (kg/week)", f"{pred_week['total_water_kg_week']:,.2f}")
-    
-        # Energy predictions
-        if "energy_week_from_kwh_per_m3" in pred_week:
-            st.write(f"**Predicted Energy (kWh/week) using kWh/m³:** "
-                     f"{pred_week['energy_week_from_kwh_per_m3']:,.0f} kWh")
-    
-            st.write(f"**Average Energy per Day (kWh/day):** "
-                     f"{pred_week['avg_energy_per_day_from_kwh_per_m3']:,.0f} kWh")
-    
-        if "energy_week_from_kwh_per_kg" in pred_week:
-            st.write(f"**Predicted Energy (kWh/week) using kWh/kg:** "
-                     f"{pred_week['energy_week_from_kwh_per_kg']:,.0f} kWh")
-    
-            st.write(f"**Average Energy per Day (kWh/day):** "
-                     f"{pred_week['avg_energy_per_day_from_kwh_per_kg']:,.0f} kWh")
-    
-        # Residence time
-        st.subheader("⏱️ Average Residence Time (from your real dryer data)")
-        res_df = pd.DataFrame([
-            {"Produkt": p, "Residence Time (days)": residence_days.get(p, float("nan"))}
-            for p in planned_wagons.keys()
-        ])
-        st.dataframe(res_df, use_container_width=True)
-    
-        # WIP water load
-        st.subheader("💧 Work-in-Progress (Water Inventory Inside Dryer)")
-        st.metric("Estimated WIP Water (kg)", f"{pred_week['wip_water_kg_estimate']:,.0f}")
-    
-        st.success("Weekly energy prediction completed.")
+
+        st.write(
+            "Enter your weekly production plan in **wagons per product per week**. "
+            "The system will automatically convert wagons → m³ → water load → energy."
+        )
+
+        # --- Compute wagon capacities & residence times ---
+        wagon_stats = compute_product_wagon_stats(results["wagons"])
+        wagon_capacity = wagon_stats["wagon_capacity_m3"]
+        residence_days = wagon_stats["residence_days"]
+
+        # --- UI form ---
+        with st.form("weekly_prediction_form"):
+
+            st.write("### Planned Wagons per Week")
+            planned_wagons = {}
+
+            # Split products into 3 columns
+            prod_left  = ["L28", "L30", "L32", "L34"]
+            prod_mid   = ["L36", "L38", "L40", "L44"]
+            prod_right = ["N40", "N44", "Y44"]
+
+            col1, col2, col3 = st.columns(3)
+
+            with col1:
+                for p in prod_left:
+                    planned_wagons[p] = st.number_input(
+                        f"{p} wagons/week", 
+                        min_value=0, 
+                        value=0, 
+                        step=10,
+                        key=f"weekly_{p}"
+                    )
+
+            with col2:
+                for p in prod_mid:
+                    planned_wagons[p] = st.number_input(
+                        f"{p} wagons/week", 
+                        min_value=0, 
+                        value=0, 
+                        step=10,
+                        key=f"weekly_{p}"
+                    )
+
+            with col3:
+                for p in prod_right:
+                    planned_wagons[p] = st.number_input(
+                        f"{p} wagons/week", 
+                        min_value=0, 
+                        value=0, 
+                        step=10,
+                        key=f"weekly_{p}"
+                    )
+
+            st.write("### Baseline KPIs")
+            base_kwh_m3 = st.number_input(
+                "Baseline kWh/m³ (default: measured avg)",
+                min_value=0.0,
+                value=float(avg_kwh_m3) if not pd.isna(avg_kwh_m3) else 0.0,
+            )
+            base_kwh_kg = st.number_input(
+                "Baseline kWh/kg (default: measured avg)",
+                min_value=0.0,
+                value=float(avg_kwh_kg) if not pd.isna(avg_kwh_kg) else 0.0,
+            )
+
+            submitted_weekly = st.form_submit_button("Predict Weekly Energy")
+
+        # ✅ CRITICAL FIX: This block MUST be OUTSIDE the form (proper indentation)
+        if submitted_weekly:
+            
+            pred_week = predict_weekly_energy_from_wagons(
+                product_wagons_per_week=planned_wagons,
+                wagons_df=results["wagons"],
+                baseline_kwh_per_m3=base_kwh_m3,
+                baseline_kwh_per_kg=base_kwh_kg,
+            )
+        
+            st.subheader("📊 Weekly Prediction Results")
+        
+            r1, r2, r3 = st.columns(3)
+            with r1:
+                st.metric("Total Wagons/Week", f"{pred_week['total_wagons_week']:,}")
+            with r2:
+                st.metric("Total Volume (m³/week)", f"{pred_week['total_volume_m3_week']:,.2f}")
+            with r3:
+                st.metric("Total Water (kg/week)", f"{pred_week['total_water_kg_week']:,.2f}")
+        
+            # Energy predictions
+            if "energy_week_from_kwh_per_m3" in pred_week:
+                st.write(f"**Predicted Energy (kWh/week) using kWh/m³:** "
+                         f"{pred_week['energy_week_from_kwh_per_m3']:,.0f} kWh")
+        
+                st.write(f"**Average Energy per Day (kWh/day):** "
+                         f"{pred_week['avg_energy_per_day_from_kwh_per_m3']:,.0f} kWh")
+        
+            if "energy_week_from_kwh_per_kg" in pred_week:
+                st.write(f"**Predicted Energy (kWh/week) using kWh/kg:** "
+                         f"{pred_week['energy_week_from_kwh_per_kg']:,.0f} kWh")
+        
+                st.write(f"**Average Energy per Day (kWh/day):** "
+                         f"{pred_week['avg_energy_per_day_from_kwh_per_kg']:,.0f} kWh")
+        
+            # Residence time
+            st.subheader("⏱️ Average Residence Time (from your real dryer data)")
+            res_df = pd.DataFrame([
+                {"Produkt": p, "Residence Time (days)": residence_days.get(p, float("nan"))}
+                for p in planned_wagons.keys()
+            ])
+            st.dataframe(res_df, use_container_width=True)
+        
+            # WIP water load
+            st.subheader("💧 Work-in-Progress (Water Inventory Inside Dryer)")
+            st.metric("Estimated WIP Water (kg)", f"{pred_week['wip_water_kg_estimate']:,.0f}")
+        
+            st.success("Weekly energy prediction completed.")
 
         # ---------------- Export ----------------
         st.markdown(
@@ -640,5 +655,3 @@ with st.form("weekly_prediction_form"):
         )
 
         st.success("✅ Analysis complete! You can explore the visualizations above or download the full report.")
-
-
