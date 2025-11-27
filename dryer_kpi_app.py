@@ -126,7 +126,7 @@ with st.sidebar:
     products = st.multiselect(
         "🧱 Product(s):",
         ["L28", "L30", "L34", "L36", "L38", "L42", "L44", "N40", "N44", "Y44"],
-        default=["L36", "L38", "N40"],  # Fixed: removed "L40" which isn't in the list
+        default=["L36", "L38", "N40"],
         help="Select products to include in the analysis",
     )
 
@@ -139,8 +139,7 @@ with st.sidebar:
     )
 
     st.markdown("---")
-    # ✅ FIX: Remove width parameter
-    run_button = st.button("▶️ Run Analysis", use_container_width=True)
+    run_button = st.button("▶️ Run Analysis", width="stretch")
 
 # ---------------------------------------------------------
 # Helper functions
@@ -440,7 +439,6 @@ if st.session_state.analysis_complete and st.session_state.results:
                     height=400,
                     plot_bgcolor="white"
                 )
-                # ✅ FIX: use_container_width instead of width
                 st.plotly_chart(fig_thermal, use_container_width=True)
             
             with col_p2:
@@ -454,11 +452,9 @@ if st.session_state.analysis_complete and st.session_state.results:
                     text_auto=".2f"
                 )
                 fig_prod_thermal.update_layout(height=400, plot_bgcolor="white")
-                # ✅ FIX
                 st.plotly_chart(fig_prod_thermal, use_container_width=True)
             
             st.subheader("Product Energy Breakdown")
-            # ✅ FIX
             st.dataframe(
                 prod_agg.style.format({
                     "Energy_thermal_kWh": "{:,.0f}",
@@ -498,7 +494,6 @@ if st.session_state.analysis_complete and st.session_state.results:
         specs_df = pd.DataFrame(specs_data)
         
         with st.expander("📊 View Complete Product Specifications"):
-            # ✅ FIX
             st.dataframe(
                 specs_df.style.format({
                     "Final Thickness (mm)": "{:.0f}",
@@ -557,7 +552,6 @@ if st.session_state.analysis_complete and st.session_state.results:
                         )
                 
                 fig_curves.update_layout(height=500, plot_bgcolor="white")
-                # ✅ FIX
                 st.plotly_chart(fig_curves, use_container_width=True)
                 
                 st.info("⭐ **Star markers** show measured values. Lines show predicted water evaporation.")
@@ -578,7 +572,6 @@ if st.session_state.analysis_complete and st.session_state.results:
                 title="Total Energy Efficiency (kWh/m³)",
             )
             fig_kwh_m3.update_layout(height=400, plot_bgcolor="white")
-            # ✅ FIX
             st.plotly_chart(fig_kwh_m3, use_container_width=True)
 
         with col_m2:
@@ -593,7 +586,6 @@ if st.session_state.analysis_complete and st.session_state.results:
                     title="Specific Energy (kWh/kg H₂O)",
                 )
                 fig_kwh_kg.update_layout(height=400, plot_bgcolor="white")
-                # ✅ FIX
                 st.plotly_chart(fig_kwh_kg, use_container_width=True)
 
         # ===== Zone Comparison =====
@@ -610,7 +602,6 @@ if st.session_state.analysis_complete and st.session_state.results:
                 title="Yearly KPI by Zone (kWh/m³)",
             )
             fig_zone.update_layout(height=400, plot_bgcolor="white")
-            # ✅ FIX
             st.plotly_chart(fig_zone, use_container_width=True)
 
         with col_z2:
@@ -621,7 +612,6 @@ if st.session_state.analysis_complete and st.session_state.results:
                 title="Energy Distribution by Zone",
             )
             fig_pie.update_layout(height=400)
-            # ✅ FIX
             st.plotly_chart(fig_pie, use_container_width=True)
 
         # ===== Data Tables =====
@@ -629,7 +619,6 @@ if st.session_state.analysis_complete and st.session_state.results:
             tab1, tab2, tab3 = st.tabs(["Monthly Summary", "Yearly Summary", "Product Totals"])
             
             with tab1:
-                # ✅ FIX
                 st.dataframe(
                     summary.style.format({
                         "Energy_thermal_kWh": "{:.2f}",
@@ -646,7 +635,6 @@ if st.session_state.analysis_complete and st.session_state.results:
                 )
             
             with tab2:
-                # ✅ FIX
                 st.dataframe(
                     yearly.style.format({
                         "Energy_thermal_kWh": "{:.2f}",
@@ -664,7 +652,6 @@ if st.session_state.analysis_complete and st.session_state.results:
             
             with tab3:
                 if product_totals is not None:
-                    # ✅ FIX
                     st.dataframe(product_totals, use_container_width=True)
 
         # ===== Weekly Prediction =====
@@ -758,7 +745,6 @@ if st.session_state.analysis_complete and st.session_state.results:
             
             if detailed_pred["products"]:
                 product_breakdown = pd.DataFrame(detailed_pred["products"])
-                # ✅ FIX
                 st.dataframe(
                     product_breakdown.style.format({
                         "volume_m3": "{:.2f}",
@@ -777,7 +763,6 @@ if st.session_state.analysis_complete and st.session_state.results:
         st.markdown('<div class="section-header">📥 Export Results</div>', unsafe_allow_html=True)
 
         excel_data = create_excel_download(results)
-        # ✅ FIX
         st.download_button(
             label="📥 Download Complete Excel Report",
             data=excel_data,
