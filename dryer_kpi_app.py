@@ -139,32 +139,20 @@ with st.sidebar:
 # ---------------------------------------------------------
 # Helper functions
 # ---------------------------------------------------------
-def safe_format(df: pd.DataFrame, format_dict: dict) -> pd.io.formats.style.Styler:
-    """Safely format dataframe, only formatting columns that exist."""
-    # Filter format_dict to only include columns that exist
-    existing_cols = set(df.columns)
-    safe_dict = {k: v for k, v in format_dict.items() if k in existing_cols}
-    
-    # Fill NaN with 0 for numeric columns before formatting
-    df_display = df.copy()
-    for col in safe_dict.keys():
-        if col in df_display.columns:
-            if df_display[col].dtype in ['float64', 'float32', 'int64', 'int32']:
-                df_display[col] = df_display[col].fillna(0)
-    
-    return df_display.style.format(safe_dict)
-
-
 def create_kpi_card(title: str, value, unit: str) -> str:
     """Return HTML for a KPI card."""
-    if value is None or (isinstance(value, float) and (pd.isna(value) or np.isnan(value))):
+    if value is None:
         text = "–"
         unit_str = ""
     else:
         try:
-            text = f"{value:,.2f}"
-            unit_str = f" {unit}"
-        except:
+            if np.isnan(value):
+                text = "–"
+                unit_str = ""
+            else:
+                text = f"{value:,.2f}"
+                unit_str = f" {unit}"
+        except (TypeError, ValueError):
             text = str(value)
             unit_str = f" {unit}"
     return f"""
@@ -181,7 +169,6 @@ def create_excel_download(results: dict) -> BytesIO:
     with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
         for key, df in results.items():
             if isinstance(df, pd.DataFrame) and not df.empty:
-                # Clean sheet name
                 sheet_name = key.replace("_", " ").title()[:31]
                 df.to_excel(writer, sheet_name=sheet_name, index=False)
     output.seek(0)
@@ -267,8 +254,6 @@ def run_analysis(energy_path: str, wagon_path: str, products_filter, month_filte
 
         # Add water KPIs
         summary = add_water_kpis(summary)
-        
-        # Fill NaN values
         summary = summary.fillna(0)
 
         # Yearly by zone
@@ -280,28 +265,10 @@ def run_analysis(energy_path: str, wagon_path: str, products_filter, month_filte
             Water_kg=("Water_kg", "sum"),
         )
         
-        # Safe division for yearly
-        yearly["kWh_thermal_per_m3"] = np.where(
-            yearly["Volume_m3"] > 0,
-            yearly["Energy_thermal_kWh"] / yearly["Volume_m3"],
-            0
-        )
-        yearly["kWh_per_m3"] = np.where(
-            yearly["Volume_m3"] > 0,
-            yearly["Energy_kWh"] / yearly["Volume_m3"],
-            0
-        )
-        yearly["kWh_thermal_per_kg"] = np.where(
-            yearly["Water_kg"] > 0,
-            yearly["Energy_thermal_kWh"] / yearly["Water_kg"],
-            0
-        )
-        yearly["kWh_per_kg"] = np.where(
-            yearly["Water_kg"] > 0,
-            yearly["Energy_kWh"] / yearly["Water_kg"],
-            0
-        )
-        
+        yearly["kWh_thermal_per_m3"] = np.where(yearly["Volume_m3"] > 0, yearly["Energy_thermal_kWh"] / yearly["Volume_m3"], 0)
+        yearly["kWh_per_m3"] = np.where(yearly["Volume_m3"] > 0, yearly["Energy_kWh"] / yearly["Volume_m3"], 0)
+        yearly["kWh_thermal_per_kg"] = np.where(yearly["Water_kg"] > 0, yearly["Energy_thermal_kWh"] / yearly["Water_kg"], 0)
+        yearly["kWh_per_kg"] = np.where(yearly["Water_kg"] > 0, yearly["Energy_kWh"] / yearly["Water_kg"], 0)
         yearly = yearly.fillna(0)
         
         # Product totals
@@ -313,27 +280,10 @@ def run_analysis(energy_path: str, wagon_path: str, products_filter, month_filte
             Water_kg=("Water_kg", "sum"),
         )
         
-        product_totals["kWh_thermal_per_m3"] = np.where(
-            product_totals["Volume_m3"] > 0,
-            product_totals["Energy_thermal_kWh"] / product_totals["Volume_m3"],
-            0
-        )
-        product_totals["kWh_per_m3"] = np.where(
-            product_totals["Volume_m3"] > 0,
-            product_totals["Energy_kWh"] / product_totals["Volume_m3"],
-            0
-        )
-        product_totals["kWh_thermal_per_kg"] = np.where(
-            product_totals["Water_kg"] > 0,
-            product_totals["Energy_thermal_kWh"] / product_totals["Water_kg"],
-            0
-        )
-        product_totals["kWh_per_kg"] = np.where(
-            product_totals["Water_kg"] > 0,
-            product_totals["Energy_kWh"] / product_totals["Water_kg"],
-            0
-        )
-        
+        product_totals["kWh_thermal_per_m3"] = np.where(product_totals["Volume_m3"] > 0, product_totals["Energy_thermal_kWh"] / product_totals["Volume_m3"], 0)
+        product_totals["kWh_per_m3"] = np.where(product_totals["Volume_m3"] > 0, product_totals["Energy_kWh"] / product_totals["Volume_m3"], 0)
+        product_totals["kWh_thermal_per_kg"] = np.where(product_totals["Water_kg"] > 0, product_totals["Energy_thermal_kWh"] / product_totals["Water_kg"], 0)
+        product_totals["kWh_per_kg"] = np.where(product_totals["Water_kg"] > 0, product_totals["Energy_kWh"] / product_totals["Water_kg"], 0)
         product_totals = product_totals.fillna(0)
 
         progress.progress(100)
@@ -364,7 +314,6 @@ if "results" not in st.session_state:
 if "analysis_complete" not in st.session_state:
     st.session_state.analysis_complete = False
 
-# Reset when files change
 if energy_file and wagon_file:
     current_files = (energy_file.name, wagon_file.name)
     if "last_files" not in st.session_state:
@@ -469,32 +418,11 @@ if st.session_state.analysis_complete and st.session_state.results:
                     "Water_kg": "sum",
                 })
                 
-                prod_agg["kWh_thermal_per_m3"] = np.where(
-                    prod_agg["Volume_m3"] > 0,
-                    prod_agg["Energy_thermal_kWh"] / prod_agg["Volume_m3"],
-                    0
-                )
-                prod_agg["kWh_per_m3"] = np.where(
-                    prod_agg["Volume_m3"] > 0,
-                    prod_agg["Energy_kWh"] / prod_agg["Volume_m3"],
-                    0
-                )
-                prod_agg["kWh_thermal_per_kg"] = np.where(
-                    prod_agg["Water_kg"] > 0,
-                    prod_agg["Energy_thermal_kWh"] / prod_agg["Water_kg"],
-                    0
-                )
-                prod_agg["kWh_per_kg"] = np.where(
-                    prod_agg["Water_kg"] > 0,
-                    prod_agg["Energy_kWh"] / prod_agg["Water_kg"],
-                    0
-                )
-                prod_agg["Electrical_pct"] = np.where(
-                    prod_agg["Energy_kWh"] > 0,
-                    (prod_agg["Energy_electrical_kWh"] / prod_agg["Energy_kWh"]) * 100,
-                    0
-                )
-                
+                prod_agg["kWh_thermal_per_m3"] = np.where(prod_agg["Volume_m3"] > 0, prod_agg["Energy_thermal_kWh"] / prod_agg["Volume_m3"], 0)
+                prod_agg["kWh_per_m3"] = np.where(prod_agg["Volume_m3"] > 0, prod_agg["Energy_kWh"] / prod_agg["Volume_m3"], 0)
+                prod_agg["kWh_thermal_per_kg"] = np.where(prod_agg["Water_kg"] > 0, prod_agg["Energy_thermal_kWh"] / prod_agg["Water_kg"], 0)
+                prod_agg["kWh_per_kg"] = np.where(prod_agg["Water_kg"] > 0, prod_agg["Energy_kWh"] / prod_agg["Water_kg"], 0)
+                prod_agg["Electrical_pct"] = np.where(prod_agg["Energy_kWh"] > 0, (prod_agg["Energy_electrical_kWh"] / prod_agg["Energy_kWh"]) * 100, 0)
                 prod_agg = prod_agg.fillna(0)
                 
                 col_p1, col_p2 = st.columns(2)
@@ -536,7 +464,6 @@ if st.session_state.analysis_complete and st.session_state.results:
                     st.plotly_chart(fig_prod_thermal, use_container_width=True)
                 
                 st.subheader("Product Energy Breakdown")
-                # Display without complex styling to avoid errors
                 st.dataframe(prod_agg, use_container_width=True)
 
             # ===== PRODUCT SPECIFICATIONS =====
@@ -597,7 +524,6 @@ if st.session_state.analysis_complete and st.session_state.results:
                         }
                     )
                     
-                    # Add measured points
                     for prod in products_to_plot:
                         if prod in PRODUCT_SPECIFICATIONS:
                             spec = PRODUCT_SPECIFICATIONS[prod]
@@ -692,7 +618,6 @@ if st.session_state.analysis_complete and st.session_state.results:
 
             wagon_stats = compute_product_wagon_stats(results["wagons"])
             wagon_capacity = wagon_stats.get("wagon_capacity_m3", {})
-            residence_days = wagon_stats.get("residence_days", {})
 
             with st.form("weekly_prediction_form"):
                 st.write("### Planned Wagons per Week")
@@ -706,48 +631,22 @@ if st.session_state.analysis_complete and st.session_state.results:
 
                 with col1:
                     for p in prod_left:
-                        planned_wagons[p] = st.number_input(
-                            f"{p} wagons/week", 
-                            min_value=0, 
-                            value=0, 
-                            step=10,
-                            key=f"weekly_{p}"
-                        )
+                        planned_wagons[p] = st.number_input(f"{p} wagons/week", min_value=0, value=0, step=10, key=f"weekly_{p}")
 
                 with col2:
                     for p in prod_mid:
-                        planned_wagons[p] = st.number_input(
-                            f"{p} wagons/week", 
-                            min_value=0, 
-                            value=0, 
-                            step=10,
-                            key=f"weekly_{p}"
-                        )
+                        planned_wagons[p] = st.number_input(f"{p} wagons/week", min_value=0, value=0, step=10, key=f"weekly_{p}")
 
                 with col3:
                     for p in prod_right:
-                        planned_wagons[p] = st.number_input(
-                            f"{p} wagons/week", 
-                            min_value=0, 
-                            value=0, 
-                            step=10,
-                            key=f"weekly_{p}"
-                        )
+                        planned_wagons[p] = st.number_input(f"{p} wagons/week", min_value=0, value=0, step=10, key=f"weekly_{p}")
 
                 st.write("### Baseline KPIs")
                 avg_kwh_m3 = float(yearly["kWh_per_m3"].mean()) if len(yearly) > 0 else 0.0
                 avg_kwh_kg = float(yearly["kWh_per_kg"].mean()) if len(yearly) > 0 else 0.0
                 
-                base_kwh_m3 = st.number_input(
-                    "Baseline kWh/m³",
-                    min_value=0.0,
-                    value=avg_kwh_m3,
-                )
-                base_kwh_kg = st.number_input(
-                    "Baseline kWh/kg",
-                    min_value=0.0,
-                    value=avg_kwh_kg,
-                )
+                base_kwh_m3 = st.number_input("Baseline kWh/m³", min_value=0.0, value=avg_kwh_m3)
+                base_kwh_kg = st.number_input("Baseline kWh/kg", min_value=0.0, value=avg_kwh_kg)
 
                 submitted_weekly = st.form_submit_button("Calculate Prediction")
 
@@ -802,12 +701,3 @@ if st.session_state.analysis_complete and st.session_state.results:
         st.error(f"❌ Error displaying results: {display_error}")
         with st.expander("🔍 View Error Details"):
             st.exception(display_error)
-        
-        # Still show raw data
-        st.subheader("📋 Raw Data (Fallback View)")
-        if "summary" in results:
-            st.write("Summary Data:")
-            st.dataframe(results["summary"])
-        if "yearly" in results:
-            st.write("Yearly Data:")
-            st.dataframe(results["yearly"])
