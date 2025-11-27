@@ -1,5 +1,5 @@
 """
-Lindner Dryer KPI Calculation Module (Final Corrected Version)
+Lindner Dryer KPI Calculation Module (Final Complete Version)
 
 This module:
 - Parses hourly energy data (kWh for each zone)
@@ -7,10 +7,10 @@ This module:
 - Parses wagon tracking data (products, volumes, zone times)
 - Builds zone intervals per wagon (Z1–Z5)
 - Allocates zone energy to products by time-overlap
+- Uses detailed product specifications with linear water-loss formulas
 - Aggregates KPIs by month/product/zone
 - Computes kWh/m³ for both thermal and total energy
-- Uses built-in water-loss benchmarks to compute kWh/kg
-- Provides prediction helpers for future product mixes
+- Provides prediction helpers with formula-based calculations
 """
 
 import pandas as pd
@@ -50,20 +50,169 @@ ZONE_ENERGY_MAPPING = {
 
 # ---------------------------------------------------------
 # Built-in Water Benchmarks (kg per m³)
-# Derived from Wasserverlust file
+# CALCULATED FROM ACTUAL MEASUREMENTS
+# Source: Wasserverlust-Platten-W1-Endmass_2024.03.18.xlsx
+# Formula: water_per_plate_kg / volume_per_plate_m3
 # ---------------------------------------------------------
 WATER_PER_M3_KG = {
-    "L28": 226.7,
-    "L30": 231.0,
-    "L32": 237.8,
-    "L34": 244.7,
-    "L36": 207.1,
-    "L38": 235.5,
-    "L40": 219.4,
-    "L44": 187.2,
-    "N40": 237.6,
-    "N44": 237.6,
-    "Y44": 439.0,
+    "L28": 242.2,  # 2.81 kg / 0.0116 m³
+    "L30": 244.7,  # 3.01 kg / 0.0123 m³
+    "L34": 258.2,  # 3.64 kg / 0.0141 m³
+    "L36": 188.8,  # 2.87 kg / 0.0152 m³
+    "L38": 252.1,  # 4.11 kg / 0.0163 m³
+    "L42": 198.3,  # 3.59 kg / 0.0181 m³
+    "L44": 203.6,  # 3.91 kg / 0.0192 m³
+    "N40": 189.5,  # 3.43 kg / 0.0181 m³
+    "N44": 201.5,  # 4.01 kg / 0.0199 m³
+    "Y44": 408.9,  # 8.30 kg / 0.0203 m³
+}
+
+# ---------------------------------------------------------
+# DETAILED PRODUCT SPECIFICATIONS & WATER-LOSS FORMULAS
+# From measured data table (Wasserverlust-Platten)
+# Water formula: water_g = slope * pressed_thickness_mm + intercept
+# ---------------------------------------------------------
+PRODUCT_SPECIFICATIONS = {
+    "L28": {
+        "final_thickness_mm": 28,
+        "press_measurement_mm": 4,
+        "pressed_thickness_mm": 32,
+        "edge_length_mm": 602,
+        "volume_m3": 0.0116,
+        "suspension_kg": 330,
+        "formula": "-0.060x + 107.7",
+        "slope": -0.060,
+        "intercept": 107.7,
+        "water_per_mm_g": 88,
+        "water_per_plate_kg": 2.81,
+        "water_per_m3_kg": 242.2,
+    },
+    "L30": {
+        "final_thickness_mm": 30,
+        "press_measurement_mm": 4,
+        "pressed_thickness_mm": 34,
+        "edge_length_mm": 602,
+        "volume_m3": 0.0123,
+        "suspension_kg": 330,
+        "formula": "-0.042x + 102.3",
+        "slope": -0.042,
+        "intercept": 102.3,
+        "water_per_mm_g": 88,
+        "water_per_plate_kg": 3.01,
+        "water_per_m3_kg": 244.7,
+    },
+    "L34": {
+        "final_thickness_mm": 34,
+        "press_measurement_mm": 5,
+        "pressed_thickness_mm": 39,
+        "edge_length_mm": 602,
+        "volume_m3": 0.0141,
+        "suspension_kg": 330,
+        "formula": "-0.056x + 111.9",
+        "slope": -0.056,
+        "intercept": 111.9,
+        "water_per_mm_g": 93,
+        "water_per_plate_kg": 3.64,
+        "water_per_m3_kg": 258.2,
+    },
+    "L36": {
+        "final_thickness_mm": 36,
+        "press_measurement_mm": 6,
+        "pressed_thickness_mm": 42,
+        "edge_length_mm": 602,
+        "volume_m3": 0.0152,
+        "suspension_kg": 330,
+        "formula": "-0.025x + 76.6",
+        "slope": -0.025,
+        "intercept": 76.6,
+        "water_per_mm_g": 68,
+        "water_per_plate_kg": 2.87,
+        "water_per_m3_kg": 188.8,
+    },
+    "L38": {
+        "final_thickness_mm": 38,
+        "press_measurement_mm": 7,
+        "pressed_thickness_mm": 45,
+        "edge_length_mm": 602,
+        "volume_m3": 0.0163,
+        "suspension_kg": 330,
+        "formula": "-0.058x + 110.5",
+        "slope": -0.058,
+        "intercept": 110.5,
+        "water_per_mm_g": 91,
+        "water_per_plate_kg": 4.11,
+        "water_per_m3_kg": 252.1,
+    },
+    "L42": {
+        "final_thickness_mm": 42,
+        "press_measurement_mm": 8,
+        "pressed_thickness_mm": 50,
+        "edge_length_mm": 602,
+        "volume_m3": 0.0181,
+        "suspension_kg": 330,
+        "formula": "-0.007x + 74.2",
+        "slope": -0.007,
+        "intercept": 74.2,
+        "water_per_mm_g": 72,
+        "water_per_plate_kg": 3.59,
+        "water_per_m3_kg": 198.3,
+    },
+    "L44": {
+        "final_thickness_mm": 44,
+        "press_measurement_mm": 9,
+        "pressed_thickness_mm": 53,
+        "edge_length_mm": 602,
+        "volume_m3": 0.0192,
+        "suspension_kg": 330,
+        "formula": "-0.011x + 77.4",
+        "slope": -0.011,
+        "intercept": 77.4,
+        "water_per_mm_g": 74,
+        "water_per_plate_kg": 3.91,
+        "water_per_m3_kg": 203.6,
+    },
+    "N40": {
+        "final_thickness_mm": 40,
+        "press_measurement_mm": 10,
+        "pressed_thickness_mm": 50,
+        "edge_length_mm": 602,
+        "volume_m3": 0.0181,
+        "suspension_kg": 330,
+        "formula": "-0.103x + 120.5",
+        "slope": -0.103,
+        "intercept": 120.5,
+        "water_per_mm_g": 69,
+        "water_per_plate_kg": 3.43,
+        "water_per_m3_kg": 189.5,
+    },
+    "N44": {
+        "final_thickness_mm": 44,
+        "press_measurement_mm": 11,
+        "pressed_thickness_mm": 55,
+        "edge_length_mm": 602,
+        "volume_m3": 0.0199,
+        "suspension_kg": 330,
+        "formula": "-0.017x + 78.5",
+        "slope": -0.017,
+        "intercept": 78.5,
+        "water_per_mm_g": 73,
+        "water_per_plate_kg": 4.01,
+        "water_per_m3_kg": 201.5,
+    },
+    "Y44": {
+        "final_thickness_mm": 44,
+        "press_measurement_mm": 12,
+        "pressed_thickness_mm": 56,
+        "edge_length_mm": 602,
+        "volume_m3": 0.0203,
+        "suspension_kg": 330,
+        "formula": "-0.157x + 200.0",
+        "slope": -0.157,
+        "intercept": 200.0,
+        "water_per_mm_g": 148,
+        "water_per_plate_kg": 8.30,
+        "water_per_m3_kg": 408.9,
+    },
 }
 
 
@@ -274,7 +423,7 @@ def allocate_energy(e: pd.DataFrame, ivals: pd.DataFrame) -> pd.DataFrame:
     logger.info("Allocating energy to products...")
     results = []
 
-    # First allocate thermal energy per zone
+    # Allocate thermal energy per zone
     for z_key, z_name in ZONE_ENERGY_MAPPING.items():
         thermal_col = f"E_thermal_{z_name}_kWh"
 
@@ -332,7 +481,7 @@ def allocate_energy(e: pd.DataFrame, ivals: pd.DataFrame) -> pd.DataFrame:
             # Allocate thermal energy
             merged["Energy_thermal_kWh"] = merged[thermal_col] * merged["Overlap_h"]
             
-            # Allocate electrical energy proportionally (split across all products in that hour)
+            # Allocate electrical energy proportionally
             merged["Energy_electrical_kWh"] = merged["E_el_kWh"] * merged["Overlap_h"]
 
             # Smart column detection for Month
@@ -408,6 +557,166 @@ def add_water_kpis(df: pd.DataFrame) -> pd.DataFrame:
 
 
 # =====================================================================
+# WATER-LOSS CALCULATION FUNCTIONS (Formula-based)
+# =====================================================================
+def calculate_water_per_plate(product: str, pressed_thickness_mm: float = None) -> float:
+    """
+    Calculate water evaporation per plate using linear formula.
+    
+    Formula: water_g = slope * pressed_thickness_mm + intercept
+    
+    Args:
+        product: Product code (e.g., "L36", "N40")
+        pressed_thickness_mm: Pressed thickness in mm (optional, uses default if None)
+    
+    Returns:
+        Water evaporation in kg per plate
+    """
+    if product not in PRODUCT_SPECIFICATIONS:
+        logger.warning(f"Product {product} not in specifications, using benchmark")
+        return WATER_PER_M3_KG.get(product, 200.0) * 0.015
+    
+    spec = PRODUCT_SPECIFICATIONS[product]
+    
+    # Use provided thickness or default
+    thickness = pressed_thickness_mm if pressed_thickness_mm else spec["pressed_thickness_mm"]
+    
+    # Apply linear formula: y = slope * x + intercept
+    water_g = spec["slope"] * thickness + spec["intercept"]
+    water_kg = water_g / 1000.0
+    
+    return max(water_kg, 0.0)
+
+
+def calculate_water_per_m3_formula(product: str) -> float:
+    """
+    Calculate water per m³ based on measured specifications.
+    
+    Args:
+        product: Product code
+    
+    Returns:
+        Water density in kg/m³
+    """
+    if product not in PRODUCT_SPECIFICATIONS:
+        return WATER_PER_M3_KG.get(product, 200.0)
+    
+    spec = PRODUCT_SPECIFICATIONS[product]
+    return spec["water_per_m3_kg"]
+
+
+def get_product_water_curve(product: str, thickness_range: list = None) -> pd.DataFrame:
+    """
+    Generate water evaporation curve for a product across thickness range.
+    
+    Args:
+        product: Product code
+        thickness_range: List of thicknesses to evaluate [min, max]
+    
+    Returns:
+        DataFrame with thickness and water evaporation
+    """
+    if product not in PRODUCT_SPECIFICATIONS:
+        return pd.DataFrame()
+    
+    spec = PRODUCT_SPECIFICATIONS[product]
+    
+    if thickness_range is None:
+        center = spec["pressed_thickness_mm"]
+        thickness_range = [int(center * 0.8), int(center * 1.2)]
+    
+    thicknesses = np.linspace(thickness_range[0], thickness_range[1], 50)
+    water_values = []
+    
+    for t in thicknesses:
+        water_kg = calculate_water_per_plate(product, t)
+        water_values.append(water_kg)
+    
+    return pd.DataFrame({
+        "Pressed_Thickness_mm": thicknesses,
+        "Water_per_Plate_kg": water_values,
+        "Product": product
+    })
+
+
+def predict_production_energy(
+    product_volumes_m3: dict,
+    baseline_kwh_per_m3: float = None,
+    baseline_kwh_per_kg: float = None,
+    use_formulas: bool = True
+) -> dict:
+    """
+    Enhanced prediction using product-specific formulas.
+    
+    Args:
+        product_volumes_m3: dict like {"L36": 100.5, "N40": 50.2} (m³)
+        baseline_kwh_per_m3: Energy efficiency (kWh/m³)
+        baseline_kwh_per_kg: Specific energy (kWh/kg water)
+        use_formulas: If True, use measured formulas; if False, use simple benchmarks
+    
+    Returns:
+        dict with detailed predictions per product
+    """
+    results = {
+        "products": [],
+        "total_volume_m3": 0,
+        "total_water_kg": 0,
+        "total_energy_kwh": 0,
+    }
+    
+    for product, volume_m3 in product_volumes_m3.items():
+        if volume_m3 is None or volume_m3 <= 0:
+            continue
+        
+        # Calculate water load
+        if use_formulas and product in PRODUCT_SPECIFICATIONS:
+            spec = PRODUCT_SPECIFICATIONS[product]
+            water_per_m3 = spec["water_per_m3_kg"]
+            water_per_plate = spec["water_per_plate_kg"]
+            num_plates = volume_m3 / spec["volume_m3"]
+        else:
+            water_per_m3 = WATER_PER_M3_KG.get(product, 200.0)
+            water_per_plate = None
+            num_plates = None
+        
+        water_kg = volume_m3 * water_per_m3
+        
+        # Calculate energy
+        energy_from_volume = baseline_kwh_per_m3 * volume_m3 if baseline_kwh_per_m3 else None
+        energy_from_water = baseline_kwh_per_kg * water_kg if baseline_kwh_per_kg else None
+        
+        product_result = {
+            "product": product,
+            "volume_m3": volume_m3,
+            "water_per_m3_kg": water_per_m3,
+            "water_kg": water_kg,
+            "num_plates": num_plates,
+            "water_per_plate_kg": water_per_plate,
+        }
+        
+        if energy_from_volume:
+            product_result["energy_from_volume_kwh"] = energy_from_volume
+        if energy_from_water:
+            product_result["energy_from_water_kwh"] = energy_from_water
+        
+        results["products"].append(product_result)
+        results["total_volume_m3"] += volume_m3
+        results["total_water_kg"] += water_kg
+        
+        if energy_from_water:
+            results["total_energy_kwh"] += energy_from_water
+        elif energy_from_volume:
+            results["total_energy_kwh"] += energy_from_volume
+    
+    results["mean_water_per_m3"] = (
+        results["total_water_kg"] / results["total_volume_m3"]
+        if results["total_volume_m3"] > 0 else 0
+    )
+    
+    return results
+
+
+# =====================================================================
 # PREDICTION HELPERS
 # =====================================================================
 def predict_mix_energy(
@@ -417,14 +726,6 @@ def predict_mix_energy(
 ) -> dict:
     """
     Estimate energy use from a planned product mix (in m³).
-    
-    Args:
-        product_mix_m3: dict like {"L36": 100, "N40": 50} (m³ per product)
-        baseline_kwh_per_m3: energy efficiency (kWh/m³)
-        baseline_kwh_per_kg: specific energy (kWh/kg water)
-    
-    Returns:
-        dict with predictions
     """
     total_volume = 0
     total_water = 0
