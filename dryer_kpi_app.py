@@ -126,7 +126,7 @@ with st.sidebar:
     products = st.multiselect(
         "🧱 Product(s):",
         ["L28", "L30", "L34", "L36", "L38", "L42", "L44", "N40", "N44", "Y44"],
-        default=["L36", "L38", "L40", "N40"],
+        default=["L36", "L38", "N40"],  # Fixed: removed "L40" which isn't in the list
         help="Select products to include in the analysis",
     )
 
@@ -139,7 +139,8 @@ with st.sidebar:
     )
 
     st.markdown("---")
-    run_button = st.button("▶️ Run Analysis", width="stretch")
+    # ✅ FIX: Remove width parameter
+    run_button = st.button("▶️ Run Analysis", use_container_width=True)
 
 # ---------------------------------------------------------
 # Helper functions
@@ -439,7 +440,8 @@ if st.session_state.analysis_complete and st.session_state.results:
                     height=400,
                     plot_bgcolor="white"
                 )
-                st.plotly_chart(fig_thermal, width="stretch")
+                # ✅ FIX: use_container_width instead of width
+                st.plotly_chart(fig_thermal, use_container_width=True)
             
             with col_p2:
                 fig_prod_thermal = px.bar(
@@ -452,9 +454,11 @@ if st.session_state.analysis_complete and st.session_state.results:
                     text_auto=".2f"
                 )
                 fig_prod_thermal.update_layout(height=400, plot_bgcolor="white")
-                st.plotly_chart(fig_prod_thermal, width="stretch")
+                # ✅ FIX
+                st.plotly_chart(fig_prod_thermal, use_container_width=True)
             
             st.subheader("Product Energy Breakdown")
+            # ✅ FIX
             st.dataframe(
                 prod_agg.style.format({
                     "Energy_thermal_kWh": "{:,.0f}",
@@ -468,7 +472,7 @@ if st.session_state.analysis_complete and st.session_state.results:
                     "kWh_per_kg": "{:.3f}",
                     "Electrical_%": "{:.1f}%",
                 }).background_gradient(subset=["kWh_thermal_per_kg"], cmap="RdYlGn_r"),
-                width="stretch"
+                use_container_width=True
             )
 
         # ===== PRODUCT SPECIFICATIONS =====
@@ -494,6 +498,7 @@ if st.session_state.analysis_complete and st.session_state.results:
         specs_df = pd.DataFrame(specs_data)
         
         with st.expander("📊 View Complete Product Specifications"):
+            # ✅ FIX
             st.dataframe(
                 specs_df.style.format({
                     "Final Thickness (mm)": "{:.0f}",
@@ -502,7 +507,7 @@ if st.session_state.analysis_complete and st.session_state.results:
                     "Water per Plate (kg)": "{:.2f}",
                     "Water per m³ (kg/m³)": "{:.1f}",
                 }),
-                width="stretch"
+                use_container_width=True
             )
         
         # Water curves
@@ -552,7 +557,8 @@ if st.session_state.analysis_complete and st.session_state.results:
                         )
                 
                 fig_curves.update_layout(height=500, plot_bgcolor="white")
-                st.plotly_chart(fig_curves, width="stretch")
+                # ✅ FIX
+                st.plotly_chart(fig_curves, use_container_width=True)
                 
                 st.info("⭐ **Star markers** show measured values. Lines show predicted water evaporation.")
 
@@ -572,7 +578,8 @@ if st.session_state.analysis_complete and st.session_state.results:
                 title="Total Energy Efficiency (kWh/m³)",
             )
             fig_kwh_m3.update_layout(height=400, plot_bgcolor="white")
-            st.plotly_chart(fig_kwh_m3, width="stretch")
+            # ✅ FIX
+            st.plotly_chart(fig_kwh_m3, use_container_width=True)
 
         with col_m2:
             if "kWh_per_kg" in summary.columns:
@@ -586,7 +593,8 @@ if st.session_state.analysis_complete and st.session_state.results:
                     title="Specific Energy (kWh/kg H₂O)",
                 )
                 fig_kwh_kg.update_layout(height=400, plot_bgcolor="white")
-                st.plotly_chart(fig_kwh_kg, width="stretch")
+                # ✅ FIX
+                st.plotly_chart(fig_kwh_kg, use_container_width=True)
 
         # ===== Zone Comparison =====
         st.markdown('<div class="section-header">📉 Zone Comparison</div>', unsafe_allow_html=True)
@@ -602,7 +610,8 @@ if st.session_state.analysis_complete and st.session_state.results:
                 title="Yearly KPI by Zone (kWh/m³)",
             )
             fig_zone.update_layout(height=400, plot_bgcolor="white")
-            st.plotly_chart(fig_zone, width="stretch")
+            # ✅ FIX
+            st.plotly_chart(fig_zone, use_container_width=True)
 
         with col_z2:
             fig_pie = px.pie(
@@ -612,13 +621,15 @@ if st.session_state.analysis_complete and st.session_state.results:
                 title="Energy Distribution by Zone",
             )
             fig_pie.update_layout(height=400)
-            st.plotly_chart(fig_pie, width="stretch")
+            # ✅ FIX
+            st.plotly_chart(fig_pie, use_container_width=True)
 
         # ===== Data Tables =====
         with st.expander("📋 View Detailed Data Tables"):
             tab1, tab2, tab3 = st.tabs(["Monthly Summary", "Yearly Summary", "Product Totals"])
             
             with tab1:
+                # ✅ FIX
                 st.dataframe(
                     summary.style.format({
                         "Energy_thermal_kWh": "{:.2f}",
@@ -631,10 +642,11 @@ if st.session_state.analysis_complete and st.session_state.results:
                         "kWh_thermal_per_kg": "{:.3f}",
                         "kWh_per_kg": "{:.3f}",
                     }),
-                    width="stretch"
+                    use_container_width=True
                 )
             
             with tab2:
+                # ✅ FIX
                 st.dataframe(
                     yearly.style.format({
                         "Energy_thermal_kWh": "{:.2f}",
@@ -647,12 +659,13 @@ if st.session_state.analysis_complete and st.session_state.results:
                         "kWh_thermal_per_kg": "{:.3f}",
                         "kWh_per_kg": "{:.3f}",
                     }),
-                    width="stretch"
+                    use_container_width=True
                 )
             
             with tab3:
                 if product_totals is not None:
-                    st.dataframe(product_totals, width="stretch")
+                    # ✅ FIX
+                    st.dataframe(product_totals, use_container_width=True)
 
         # ===== Weekly Prediction =====
         st.markdown('<div class="section-header">🔮 Weekly Energy Prediction</div>', unsafe_allow_html=True)
@@ -745,6 +758,7 @@ if st.session_state.analysis_complete and st.session_state.results:
             
             if detailed_pred["products"]:
                 product_breakdown = pd.DataFrame(detailed_pred["products"])
+                # ✅ FIX
                 st.dataframe(
                     product_breakdown.style.format({
                         "volume_m3": "{:.2f}",
@@ -754,7 +768,7 @@ if st.session_state.analysis_complete and st.session_state.results:
                         "water_per_plate_kg": "{:.2f}",
                         "energy_from_water_kwh": "{:.0f}",
                     }),
-                    width="stretch"
+                    use_container_width=True
                 )
             
             st.success("✅ Weekly energy prediction completed.")
@@ -763,12 +777,13 @@ if st.session_state.analysis_complete and st.session_state.results:
         st.markdown('<div class="section-header">📥 Export Results</div>', unsafe_allow_html=True)
 
         excel_data = create_excel_download(results)
+        # ✅ FIX
         st.download_button(
             label="📥 Download Complete Excel Report",
             data=excel_data,
             file_name="Dryer_KPI_Analysis.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            width="stretch"
+            use_container_width=True
         )
 
         st.success("✅ Analysis complete! Explore the visualizations above or download the full report.")
