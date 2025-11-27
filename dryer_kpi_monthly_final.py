@@ -3,11 +3,12 @@ Lindner Dryer KPI Calculation Module (Final Corrected Version)
 
 This module:
 - Parses hourly energy data (kWh for each zone)
+- Separates thermal (gas) and electrical energy
 - Parses wagon tracking data (products, volumes, zone times)
 - Builds zone intervals per wagon (Z1–Z5)
 - Allocates zone energy to products by time-overlap
 - Aggregates KPIs by month/product/zone
-- Computes kWh/m³
+- Computes kWh/m³ for both thermal and total energy
 - Uses built-in water-loss benchmarks to compute kWh/kg
 - Provides prediction helpers for future product mixes
 """
@@ -94,7 +95,7 @@ def parse_duration_series(s: pd.Series) -> pd.Series:
 # ENERGY PARSING
 # =====================================================================
 def parse_energy(df: pd.DataFrame) -> pd.DataFrame:
-    """Parse hourly energy consumption."""
+    """Parse hourly energy consumption (thermal + electrical)."""
     logger.info("Parsing energy data...")
     df = df.copy()
 
@@ -104,16 +105,21 @@ def parse_energy(df: pd.DataFrame) -> pd.DataFrame:
     df["Month"] = df["Zeitstempel"].dt.month
     df["Year"] = df["Zeitstempel"].dt.year
 
+    # Convert gas consumption to kWh for each zone (THERMAL)
     for z_key, z_name in ZONE_ENERGY_MAPPING.items():
         gas_col = f"Gasmenge, {z_name} [m³]"
-        out_col = f"E_{z_name}_kWh"
+        thermal_col = f"E_thermal_{z_name}_kWh"
+        
         if gas_col in df.columns:
-            df[out_col] = df[gas_col] * CONFIG["gas_to_kwh"]
+            df[thermal_col] = df[gas_col] * CONFIG["gas_to_kwh"]
         else:
-            df[out_col] = 0.0
+            df[thermal_col] = 0.0
 
+    # Parse electrical energy (ELECTRICAL)
     if "Energieverbrauch, elektr. [kWh]" in df.columns:
-        df["E_el_kWh"] = df["Energieverbrauch, elektr. [kWh]"]
+        df["E_el_kWh"] = pd.to_numeric(
+            df["Energieverbrauch, elektr. [kWh]"], errors='coerce'
+        ).fillna(0.0)
     else:
         df["E_el_kWh"] = 0.0
 
@@ -261,21 +267,22 @@ def explode_intervals(df: pd.DataFrame) -> pd.DataFrame:
 
 
 # =====================================================================
-# ENERGY ALLOCATION (FIXED)
+# ENERGY ALLOCATION (with thermal/electrical separation)
 # =====================================================================
 def allocate_energy(e: pd.DataFrame, ivals: pd.DataFrame) -> pd.DataFrame:
-    """Allocate energy to products based on time overlap."""
+    """Allocate energy to products based on time overlap (thermal + electrical)."""
     logger.info("Allocating energy to products...")
     results = []
 
+    # First allocate thermal energy per zone
     for z_key, z_name in ZONE_ENERGY_MAPPING.items():
-        col = f"E_{z_name}_kWh"
+        thermal_col = f"E_thermal_{z_name}_kWh"
 
-        if col not in e.columns:
-            logger.warning(f"Energy column {col} not found")
+        if thermal_col not in e.columns:
+            logger.warning(f"Thermal energy column {thermal_col} not found")
             continue
 
-        e_zone = e[e[col] > 0].copy()
+        e_zone = e[e[thermal_col] > 0].copy()
         iv_zone = ivals[ivals["Zone"] == z_key].copy()
 
         if e_zone.empty or iv_zone.empty:
@@ -322,9 +329,13 @@ def allocate_energy(e: pd.DataFrame, ivals: pd.DataFrame) -> pd.DataFrame:
             if merged.empty:
                 continue
 
-            merged["Energy_share_kWh"] = merged[col] * merged["Overlap_h"]
+            # Allocate thermal energy
+            merged["Energy_thermal_kWh"] = merged[thermal_col] * merged["Overlap_h"]
+            
+            # Allocate electrical energy proportionally (split across all products in that hour)
+            merged["Energy_electrical_kWh"] = merged["E_el_kWh"] * merged["Overlap_h"]
 
-            # ✅ FIX: Smart column detection for Month
+            # Smart column detection for Month
             if "Month_e" in merged.columns:
                 month_col = "Month_e"
             elif "Month_p" in merged.columns:
@@ -332,13 +343,13 @@ def allocate_energy(e: pd.DataFrame, ivals: pd.DataFrame) -> pd.DataFrame:
             elif "Month" in merged.columns:
                 month_col = "Month"
             else:
-                # Fallback: extract from timestamp
                 merged["Month"] = merged["E_start"].dt.month
                 month_col = "Month"
 
             # Select columns and rename
             result = merged[[
-                month_col, "Produkt", "m3", "Overlap_h", "Energy_share_kWh"
+                month_col, "Produkt", "m3", "Overlap_h", 
+                "Energy_thermal_kWh", "Energy_electrical_kWh"
             ]].copy()
 
             result = result.rename(columns={month_col: "Month"})
@@ -351,11 +362,20 @@ def allocate_energy(e: pd.DataFrame, ivals: pd.DataFrame) -> pd.DataFrame:
 
     if results:
         final = pd.concat(results, ignore_index=True)
+        
+        # Calculate total energy
+        final["Energy_share_kWh"] = (
+            final["Energy_thermal_kWh"] + final["Energy_electrical_kWh"]
+        )
+        
         logger.info(f"Allocated {len(final)} energy records")
         return final
     
     logger.warning("No energy could be allocated")
-    return pd.DataFrame(columns=["Month","Produkt","Zone","Energy_share_kWh","Overlap_h","m3"])
+    return pd.DataFrame(columns=[
+        "Month", "Produkt", "Zone", "Energy_thermal_kWh", 
+        "Energy_electrical_kWh", "Energy_share_kWh", "Overlap_h", "m3"
+    ])
 
 
 # =====================================================================
@@ -367,7 +387,22 @@ def add_water_kpis(df: pd.DataFrame) -> pd.DataFrame:
 
     df["water_per_m3_bench"] = df["Produkt"].map(WATER_PER_M3_KG)
     df["Water_kg"] = df["Volume_m3"] * df["water_per_m3_bench"]
-    df["kWh_per_kg"] = df["Energy_kWh"] / df["Water_kg"].replace(0, np.nan)
+    
+    # Thermal-only KPIs
+    df["kWh_thermal_per_m3"] = (
+        df["Energy_thermal_kWh"] / df["Volume_m3"].replace(0, np.nan)
+    )
+    df["kWh_thermal_per_kg"] = (
+        df["Energy_thermal_kWh"] / df["Water_kg"].replace(0, np.nan)
+    )
+    
+    # Total energy KPIs (thermal + electrical)
+    df["kWh_per_m3"] = (
+        df["Energy_kWh"] / df["Volume_m3"].replace(0, np.nan)
+    )
+    df["kWh_per_kg"] = (
+        df["Energy_kWh"] / df["Water_kg"].replace(0, np.nan)
+    )
 
     return df
 
@@ -420,16 +455,7 @@ def predict_mix_energy(
 
 def compute_product_wagon_stats(wagons: pd.DataFrame) -> dict:
     """
-    Compute per-product wagon statistics:
-      - average m³ per wagon
-      - average residence time in hours/days
-      - wagon count
-
-    Args:
-        wagons: Wagon dataframe with WG_Nr, Produkt, m3, t0, Entnahme
-    
-    Returns:
-        dict with statistics
+    Compute per-product wagon statistics.
     """
     logger.info("Computing wagon statistics by product...")
     df = wagons.copy()
@@ -477,15 +503,6 @@ def predict_weekly_energy_from_wagons(
 ) -> dict:
     """
     Predict weekly energy consumption from planned wagons per week.
-    
-    Args:
-        product_wagons_per_week: dict like {"L36": 100, "N40": 50} (wagons/week)
-        wagons_df: historical wagon dataframe
-        baseline_kwh_per_m3: energy efficiency (kWh/m³)
-        baseline_kwh_per_kg: specific energy (kWh/kg water)
-    
-    Returns:
-        dict with weekly predictions
     """
     logger.info("Predicting weekly energy from wagon plan...")
     
@@ -507,7 +524,7 @@ def predict_weekly_energy_from_wagons(
         total_wagons += wagons_week
         
         # Get wagon capacity (m³ per wagon)
-        capacity = wagon_capacity.get(prod, 1.5)  # fallback to 1.5 m³
+        capacity = wagon_capacity.get(prod, 1.5)
         volume = wagons_week * capacity
         total_volume += volume
         
@@ -534,11 +551,10 @@ def predict_weekly_energy_from_wagons(
         result["energy_week_from_kwh_per_kg"] = energy_week
         result["avg_energy_per_day_from_kwh_per_kg"] = energy_week / 7
     
-    # WIP (Work-in-Progress) water estimate
-    # WIP = daily water throughput × average residence time
+    # WIP estimate
     avg_residence = np.nanmean(list(residence_days.values()))
     if not np.isnan(avg_residence) and total_water > 0:
-        daily_water = total_water / 7  # weekly → daily
+        daily_water = total_water / 7
         result["wip_water_kg_estimate"] = daily_water * avg_residence
     else:
         result["wip_water_kg_estimate"] = 0
@@ -548,7 +564,7 @@ def predict_weekly_energy_from_wagons(
 
 
 # =====================================================================
-# MAIN (for standalone testing)
+# MAIN
 # =====================================================================
 def main():
     """Standalone execution for testing."""
