@@ -61,6 +61,22 @@ PRODUCT_SPECIFICATIONS = {
         "water_per_mm_g": 88,
         "water_per_plate_kg": 3.01,
     },
+    # ✅ NEW: L32 (INTERPOLATED)
+    "L32": {
+        "product_type": "L",
+        "final_thickness_mm": 32,
+        "press_measurement_mm": 5,
+        "pressed_thickness_mm": 37,
+        "edge_length_mm": 602,
+        "volume_m3": 0.0134,
+        "suspension_kg": 330,
+        "slope": -0.049,
+        "intercept": 107.1,
+        "formula": "-0.049x + 107.1 (interpolated)",
+        "water_per_mm_g": 90,
+        "water_per_plate_kg": 3.33,
+        "interpolated": True,  # Flag to indicate this is interpolated
+    },
     "L34": {
         "product_type": "L",
         "final_thickness_mm": 34,
@@ -102,6 +118,22 @@ PRODUCT_SPECIFICATIONS = {
         "formula": "-0.058x + 110.5",
         "water_per_mm_g": 91,
         "water_per_plate_kg": 4.11,
+    },
+    # ✅ NEW: L40 (INTERPOLATED)
+    "L40": {
+        "product_type": "L",
+        "final_thickness_mm": 40,
+        "press_measurement_mm": 8,
+        "pressed_thickness_mm": 48,
+        "edge_length_mm": 602,
+        "volume_m3": 0.0174,
+        "suspension_kg": 330,
+        "slope": -0.033,
+        "intercept": 92.4,
+        "formula": "-0.033x + 92.4 (interpolated)",
+        "water_per_mm_g": 82,
+        "water_per_plate_kg": 3.94,
+        "interpolated": True,  # Flag to indicate this is interpolated
     },
     "L42": {
         "product_type": "L",
@@ -174,7 +206,6 @@ PRODUCT_SPECIFICATIONS = {
         "water_per_plate_kg": 8.30,
     },
 }
-
 for product, spec in PRODUCT_SPECIFICATIONS.items():
     spec["water_per_m3_kg"] = spec["water_per_plate_kg"] / spec["volume_m3"]
 
@@ -645,3 +676,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
