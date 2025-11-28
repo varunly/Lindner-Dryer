@@ -10,7 +10,7 @@ This module:
 - Uses detailed product specifications with linear water-loss formulas
 - Aggregates KPIs by month/product/zone
 - Computes kWh/m³ for both thermal and total energy
-- Provides prediction helpers with formula-based calculations
+- Provides prediction helpers with   formula-based calculations
 """
 
 import pandas as pd
@@ -874,3 +874,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
