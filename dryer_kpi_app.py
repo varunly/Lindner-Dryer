@@ -17,14 +17,13 @@ try:
         explode_intervals,
         allocate_energy,
         add_water_kpis,
-        predict_weekly_energy_from_wagons,
         compute_product_wagon_stats,
-        predict_mix_energy,
         predict_production_energy,
         calculate_water_per_m3_formula,
         get_product_water_curve,
         WATER_PER_M3_KG,
         PRODUCT_SPECIFICATIONS,
+        WATER_FORMULAS,
         CONFIG,
     )
 except ImportError as e:
@@ -94,7 +93,7 @@ st.markdown(
 
 st.info(
     "📊 Upload your **Energy** and **Hordenwagen** files. "
-    "Water-loss formulas are embedded from actual measurements."
+    "Water-loss formulas are based on suspension amount (330kg) measurements."
 )
 
 # ---------------------------------------------------------
@@ -470,20 +469,41 @@ if st.session_state.analysis_complete and st.session_state.results:
             st.markdown('<div class="section-header">📐 Product Specifications & Water-Loss Formulas</div>', unsafe_allow_html=True)
             
             st.write(
-                "Each product has a **linear formula** for water evaporation based on pressed thickness: "
-                "**Water (g) = Slope × Thickness (mm) + Intercept**"
+                "Each product type has a **suspension-based formula** for water evaporation: "
+                "**Water/mm = (Slope × 330kg) + Intercept**, then **Total Water = Water/mm × Thickness**"
             )
+            
+            # Show formulas
+            col_f1, col_f2, col_f3 = st.columns(3)
+            with col_f1:
+                st.metric(
+                    "L-Type Formula",
+                    f"{WATER_FORMULAS['L']['water_per_mm_g']:.2f} g/mm",
+                    help=WATER_FORMULAS['L']['formula_text']
+                )
+            with col_f2:
+                st.metric(
+                    "N-Type Formula",
+                    f"{WATER_FORMULAS['N']['water_per_mm_g']:.2f} g/mm",
+                    help=WATER_FORMULAS['N']['formula_text']
+                )
+            with col_f3:
+                st.metric(
+                    "Y-Type Formula",
+                    f"{WATER_FORMULAS['Y']['water_per_mm_g']:.2f} g/mm",
+                    help=WATER_FORMULAS['Y']['formula_text']
+                )
             
             specs_data = []
             for prod, spec in PRODUCT_SPECIFICATIONS.items():
                 specs_data.append({
                     "Product": prod,
-                    "Final Thickness (mm)": spec["final_thickness_mm"],
+                    "Type": spec["product_type"],
                     "Pressed Thickness (mm)": spec["pressed_thickness_mm"],
-                    "Volume per Plate (m³)": spec["volume_m3"],
+                    "Water/mm (g)": spec["water_per_mm_g"],
+                    "Water/Plate (kg)": spec["water_per_plate_kg"],
+                    "Water/m³ (kg)": spec["water_per_m3_kg"],
                     "Formula": spec["formula"],
-                    "Water per Plate (kg)": spec["water_per_plate_kg"],
-                    "Water per m³ (kg/m³)": spec["water_per_m3_kg"],
                 })
             
             specs_df = pd.DataFrame(specs_data)
@@ -517,13 +537,14 @@ if st.session_state.analysis_complete and st.session_state.results:
                         y="Water_per_Plate_kg",
                         color="Product",
                         markers=True,
-                        title="Water Evaporation vs. Pressed Thickness",
+                        title="Water Evaporation vs. Pressed Thickness (Suspension-Based Formula)",
                         labels={
                             "Pressed_Thickness_mm": "Pressed Thickness (mm)",
                             "Water_per_Plate_kg": "Water per Plate (kg)"
                         }
                     )
                     
+                    # Add measured points
                     for prod in products_to_plot:
                         if prod in PRODUCT_SPECIFICATIONS:
                             spec = PRODUCT_SPECIFICATIONS[prod]
@@ -532,14 +553,14 @@ if st.session_state.analysis_complete and st.session_state.results:
                                 y=[spec["water_per_plate_kg"]],
                                 mode='markers',
                                 marker=dict(size=12, symbol='star'),
-                                name=f"{prod} (measured)",
+                                name=f"{prod} (actual)",
                                 showlegend=True
                             )
                     
                     fig_curves.update_layout(height=500, plot_bgcolor="white")
                     st.plotly_chart(fig_curves, use_container_width=True)
                     
-                    st.info("⭐ **Star markers** show measured values. Lines show predicted water evaporation.")
+                    st.info("⭐ **Star markers** show actual product specifications. Lines show water evaporation across thickness range.")
 
             # ===== Monthly Trends =====
             st.markdown('<div class="section-header">📊 Monthly KPI Trends</div>', unsafe_allow_html=True)
@@ -613,14 +634,79 @@ if st.session_state.analysis_complete and st.session_state.results:
                     if product_totals is not None:
                         st.dataframe(product_totals, use_container_width=True)
 
-            # ===== Weekly Prediction =====
+            # ===== Weekly Prediction (AUTOMATIC BASELINE) =====
             st.markdown('<div class="section-header">🔮 Weekly Energy Prediction</div>', unsafe_allow_html=True)
 
             wagon_stats = compute_product_wagon_stats(results["wagons"])
             wagon_capacity = wagon_stats.get("wagon_capacity_m3", {})
 
+            # ✅ AUTOMATICALLY CALCULATE BASELINE KPIs
+            baseline_thermal_kwh_m3 = float(yearly["kWh_thermal_per_m3"].mean()) if len(yearly) > 0 else 0.0
+            baseline_thermal_kwh_kg = float(yearly["kWh_thermal_per_kg"].mean()) if len(yearly) > 0 else 0.0
+            baseline_total_kwh_m3 = float(yearly["kWh_per_m3"].mean()) if len(yearly) > 0 else 0.0
+            baseline_total_kwh_kg = float(yearly["kWh_per_kg"].mean()) if len(yearly) > 0 else 0.0
+
+            # Show baseline KPIs from historical data
+            st.info(
+                f"📈 **Historical Baseline KPIs** (automatically calculated from your data):\n\n"
+                f"- Thermal: **{baseline_thermal_kwh_kg:.3f} kWh/kg water** "
+                f"({baseline_thermal_kwh_m3:.1f} kWh/m³)\n"
+                f"- Total: **{baseline_total_kwh_kg:.3f} kWh/kg water** "
+                f"({baseline_total_kwh_m3:.1f} kWh/m³)"
+            )
+
+            # Option to use custom values (advanced mode)
+            use_custom_kpis = st.checkbox(
+                "🔧 Use custom KPIs (for scenario testing)", 
+                value=False,
+                help="Enable this to test 'what-if' scenarios with different efficiency targets"
+            )
+
+            if use_custom_kpis:
+                st.write("### Custom KPI Targets")
+                col_kpi1, col_kpi2 = st.columns(2)
+                
+                with col_kpi1:
+                    custom_kwh_m3 = st.number_input(
+                        "Target kWh/m³",
+                        min_value=0.0,
+                        value=baseline_total_kwh_m3,
+                        help="Energy consumption per cubic meter (default: historical average)"
+                    )
+                
+                with col_kpi2:
+                    custom_kwh_kg = st.number_input(
+                        "Target kWh/kg water",
+                        min_value=0.0,
+                        value=baseline_total_kwh_kg,
+                        help="Specific energy per kg of water evaporated (default: historical average)"
+                    )
+                
+                # Use custom values
+                prediction_kwh_m3 = custom_kwh_m3
+                prediction_kwh_kg = custom_kwh_kg
+                
+                # Show difference from baseline
+                diff_m3 = ((custom_kwh_m3 - baseline_total_kwh_m3) / baseline_total_kwh_m3 * 100) if baseline_total_kwh_m3 > 0 else 0
+                diff_kg = ((custom_kwh_kg - baseline_total_kwh_kg) / baseline_total_kwh_kg * 100) if baseline_total_kwh_kg > 0 else 0
+                
+                if abs(diff_m3) > 0.1 or abs(diff_kg) > 0.1:
+                    st.warning(
+                        f"⚠️ **Scenario Test Mode**: You're testing with KPIs that differ from historical baseline:\n"
+                        f"- kWh/m³: {diff_m3:+.1f}% change\n"
+                        f"- kWh/kg: {diff_kg:+.1f}% change"
+                    )
+            else:
+                # ✅ USE HISTORICAL BASELINE AUTOMATICALLY
+                prediction_kwh_m3 = baseline_total_kwh_m3
+                prediction_kwh_kg = baseline_total_kwh_kg
+
+            # Prediction form
             with st.form("weekly_prediction_form"):
-                st.write("### Planned Wagons per Week")
+                st.write("### 📅 Planned Production per Week")
+                
+                st.info("💡 Enter the number of wagons you plan to produce for each product type")
+                
                 planned_wagons = {}
 
                 prod_left = ["L28", "L30", "L34", "L36"]
@@ -630,59 +716,172 @@ if st.session_state.analysis_complete and st.session_state.results:
                 col1, col2, col3 = st.columns(3)
 
                 with col1:
+                    st.write("**L-Type Products**")
                     for p in prod_left:
-                        planned_wagons[p] = st.number_input(f"{p} wagons/week", min_value=0, value=0, step=10, key=f"weekly_{p}")
+                        capacity = wagon_capacity.get(p, 0)
+                        capacity_text = f" ({capacity:.2f} m³/wagon)" if capacity > 0 else " (no data)"
+                        planned_wagons[p] = st.number_input(
+                            f"{p} wagons/week{capacity_text}", 
+                            min_value=0, 
+                            value=0, 
+                            step=10,
+                            key=f"weekly_{p}"
+                        )
 
                 with col2:
+                    st.write("**L-Type Products (Heavy)**")
                     for p in prod_mid:
-                        planned_wagons[p] = st.number_input(f"{p} wagons/week", min_value=0, value=0, step=10, key=f"weekly_{p}")
+                        capacity = wagon_capacity.get(p, 0)
+                        capacity_text = f" ({capacity:.2f} m³/wagon)" if capacity > 0 else " (no data)"
+                        planned_wagons[p] = st.number_input(
+                            f"{p} wagons/week{capacity_text}", 
+                            min_value=0, 
+                            value=0, 
+                            step=10,
+                            key=f"weekly_{p}"
+                        )
 
                 with col3:
+                    st.write("**N & Y-Type Products**")
                     for p in prod_right:
-                        planned_wagons[p] = st.number_input(f"{p} wagons/week", min_value=0, value=0, step=10, key=f"weekly_{p}")
+                        capacity = wagon_capacity.get(p, 0)
+                        capacity_text = f" ({capacity:.2f} m³/wagon)" if capacity > 0 else " (no data)"
+                        planned_wagons[p] = st.number_input(
+                            f"{p} wagons/week{capacity_text}", 
+                            min_value=0, 
+                            value=0, 
+                            step=10,
+                            key=f"weekly_{p}"
+                        )
 
-                st.write("### Baseline KPIs")
-                avg_kwh_m3 = float(yearly["kWh_per_m3"].mean()) if len(yearly) > 0 else 0.0
-                avg_kwh_kg = float(yearly["kWh_per_kg"].mean()) if len(yearly) > 0 else 0.0
-                
-                base_kwh_m3 = st.number_input("Baseline kWh/m³", min_value=0.0, value=avg_kwh_m3)
-                base_kwh_kg = st.number_input("Baseline kWh/kg", min_value=0.0, value=avg_kwh_kg)
-
-                submitted_weekly = st.form_submit_button("Calculate Prediction")
+                submitted_weekly = st.form_submit_button("🔮 Calculate Weekly Prediction", type="primary")
 
             if submitted_weekly:
                 product_volumes = {}
+                total_wagons = 0
+                
                 for prod, wagons in planned_wagons.items():
                     if wagons > 0:
                         capacity = wagon_capacity.get(prod, 1.5)
+                        if capacity == 0:
+                            st.warning(f"⚠️ No historical data for {prod} wagon capacity, using default 1.5 m³")
+                            capacity = 1.5
                         product_volumes[prod] = wagons * capacity
+                        total_wagons += wagons
                 
                 if product_volumes:
+                    # ✅ USE AUTOMATIC BASELINE KPIs
                     detailed_pred = predict_production_energy(
                         product_volumes_m3=product_volumes,
-                        baseline_kwh_per_m3=base_kwh_m3,
-                        baseline_kwh_per_kg=base_kwh_kg,
+                        baseline_kwh_per_m3=prediction_kwh_m3,
+                        baseline_kwh_per_kg=prediction_kwh_kg,
                         use_formulas=True
                     )
                     
-                    st.subheader("📊 Weekly Prediction Results")
+                    st.markdown("---")
+                    st.subheader("📊 Weekly Production Forecast")
                     
-                    r1, r2, r3 = st.columns(3)
-                    with r1:
-                        st.metric("Total Volume (m³/week)", f"{detailed_pred['total_volume_m3']:,.2f}")
-                    with r2:
-                        st.metric("Total Water (kg/week)", f"{detailed_pred['total_water_kg']:,.2f}")
-                    with r3:
+                    # Summary metrics
+                    col_r1, col_r2, col_r3, col_r4 = st.columns(4)
+                    
+                    with col_r1:
+                        st.metric(
+                            "Total Wagons", 
+                            f"{total_wagons:,}",
+                            help="Total wagons planned for production"
+                        )
+                    
+                    with col_r2:
+                        st.metric(
+                            "Total Volume", 
+                            f"{detailed_pred['total_volume_m3']:,.1f} m³",
+                            help="Total cubic meters of product"
+                        )
+                    
+                    with col_r3:
+                        st.metric(
+                            "Water to Evaporate", 
+                            f"{detailed_pred['total_water_kg']:,.0f} kg",
+                            help="Total water that needs to be dried"
+                        )
+                    
+                    with col_r4:
                         if detailed_pred.get("total_energy_kwh", 0) > 0:
-                            st.metric("Total Energy (kWh/week)", f"{detailed_pred['total_energy_kwh']:,.0f}")
+                            energy_week = detailed_pred["total_energy_kwh"]
+                            st.metric(
+                                "Energy Required", 
+                                f"{energy_week:,.0f} kWh",
+                                help="Total energy needed for the week"
+                            )
+                            
+                            # Daily and hourly breakdown
+                            energy_day = energy_week / 7
+                            energy_hour = energy_day / 24
+                            
+                            st.caption(f"📅 Daily: {energy_day:,.0f} kWh/day")
+                            st.caption(f"⏱️ Hourly: {energy_hour:,.0f} kWh/hour")
                     
+                    # Product breakdown table
                     if detailed_pred.get("products"):
+                        st.write("### 📦 Product-Level Breakdown")
+                        
                         product_breakdown = pd.DataFrame(detailed_pred["products"])
-                        st.dataframe(product_breakdown, use_container_width=True)
+                        
+                        # Rename columns for better display
+                        display_df = product_breakdown.rename(columns={
+                            "product": "Product",
+                            "volume_m3": "Volume (m³)",
+                            "water_per_m3_kg": "Water Density (kg/m³)",
+                            "water_kg": "Total Water (kg)",
+                            "num_plates": "Plates",
+                            "water_per_plate_kg": "Water/Plate (kg)",
+                            "energy_from_water_kwh": "Energy (kWh)"
+                        })
+                        
+                        # Select and order columns
+                        cols_to_show = ["Product", "Volume (m³)", "Plates", "Water Density (kg/m³)", 
+                                       "Total Water (kg)", "Water/Plate (kg)"]
+                        
+                        if "Energy (kWh)" in display_df.columns:
+                            cols_to_show.append("Energy (kWh)")
+                        
+                        display_df = display_df[cols_to_show]
+                        
+                        st.dataframe(display_df, use_container_width=True)
                     
-                    st.success("✅ Weekly energy prediction completed.")
+                    # Show calculation method
+                    with st.expander("🔍 How is this calculated?"):
+                        st.write(f"""
+                        **Calculation Method:**
+                        
+                        1. **Volume Calculation:**
+                           - Wagons × Average wagon capacity = Total volume (m³)
+                           
+                        2. **Water Calculation (Suspension-Based Formula):**
+                           - L-type: Water/mm = (-0.045 × 330kg) + 101.4 = {WATER_FORMULAS['L']['water_per_mm_g']:.2f} g/mm
+                           - N-type: Water/mm = (-0.057 × 330kg) + 109.7 = {WATER_FORMULAS['N']['water_per_mm_g']:.2f} g/mm
+                           - Y-type: Water/mm = (-0.160 × 330kg) + 200.0 = {WATER_FORMULAS['Y']['water_per_mm_g']:.2f} g/mm
+                           - Total water per plate = (Water/mm × Pressed thickness) / 1000
+                           
+                        3. **Energy Prediction:**
+                           - **Method used:** kWh/kg water (most accurate)
+                           - **Baseline KPI:** {prediction_kwh_kg:.3f} kWh/kg
+                           - **Energy = Total water (kg) × Baseline KPI**
+                           
+                        4. **Baseline KPI Source:**
+                           - {'Custom scenario values' if use_custom_kpis else '**Automatically calculated from your historical data**'}
+                           - Based on actual performance from uploaded files
+                        """)
+                        
+                        if use_custom_kpis:
+                            st.warning(
+                                "⚠️ You're using **custom KPI values** for scenario testing. "
+                                "Disable 'Use custom KPIs' to use actual historical performance."
+                            )
+                    
+                    st.success("✅ Weekly energy prediction completed using historical baseline KPIs!")
                 else:
-                    st.warning("Please enter wagon counts for at least one product.")
+                    st.warning("⚠️ Please enter wagon counts for at least one product.")
 
             # ===== Export =====
             st.markdown('<div class="section-header">📥 Export Results</div>', unsafe_allow_html=True)
