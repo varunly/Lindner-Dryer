@@ -425,7 +425,7 @@ if st.session_state.analysis_complete and st.session_state.results:
             })
             st.dataframe(zone_display, use_container_width=True, hide_index=True)
 
-            # ===== 3. PRODUCT PERFORMANCE (UPDATED) =====
+            # ===== 3. PRODUCT PERFORMANCE (SIMPLIFIED) =====
             if product_totals is not None and not product_totals.empty:
                 st.markdown('<div class="section-header">📊 Product Performance</div>', unsafe_allow_html=True)
                 
@@ -440,6 +440,7 @@ if st.session_state.analysis_complete and st.session_state.results:
                 prod_agg["kWh_per_m3"] = np.where(prod_agg["Volume_m3"] > 0, prod_agg["Energy_kWh"] / prod_agg["Volume_m3"], 0)
                 prod_agg["kWh_per_kg"] = np.where(prod_agg["Water_kg"] > 0, prod_agg["Energy_kWh"] / prod_agg["Water_kg"], 0)
                 prod_agg["kWh_thermal_per_m3"] = np.where(prod_agg["Volume_m3"] > 0, prod_agg["Energy_thermal_kWh"] / prod_agg["Volume_m3"], 0)
+                prod_agg["Thermal_pct"] = np.where(prod_agg["Energy_kWh"] > 0, (prod_agg["Energy_thermal_kWh"] / prod_agg["Energy_kWh"] * 100), 0)
                 prod_agg = prod_agg.fillna(0)
                 
                 col_p1, col_p2 = st.columns(2)
@@ -474,8 +475,7 @@ if st.session_state.analysis_complete and st.session_state.results:
                     st.plotly_chart(fig_prod_energy, use_container_width=True)
                 
                 with col_p2:
-                    # ✅ REPLACED: Thermal Energy Consumed by Each Product (Bar Chart)
-                    # Sort by thermal energy for better visualization
+                    # Thermal Energy Consumed by Each Product (Horizontal Bar Chart)
                     prod_sorted = prod_agg.sort_values("Energy_thermal_kWh", ascending=True)
                     
                     fig_thermal = go.Figure()
@@ -502,11 +502,10 @@ if st.session_state.analysis_complete and st.session_state.results:
                     )
                     st.plotly_chart(fig_thermal, use_container_width=True)
                 
-                # Additional row: Thermal percentage breakdown
-                col_p3, col_p4 = st.columns(2)
+                # Thermal energy distribution pie chart (centered)
+                col_pie1, col_pie2, col_pie3 = st.columns([1, 2, 1])
                 
-                with col_p3:
-                    # Pie chart: Thermal energy distribution by product
+                with col_pie2:
                     fig_thermal_pie = px.pie(
                         prod_agg,
                         values="Energy_thermal_kWh",
@@ -518,53 +517,16 @@ if st.session_state.analysis_complete and st.session_state.results:
                     fig_thermal_pie.update_layout(height=400)
                     st.plotly_chart(fig_thermal_pie, use_container_width=True)
                 
-                with col_p4:
-                    # Thermal vs Electrical comparison per product
-                    fig_comparison = go.Figure()
-                    
-                    # Calculate thermal percentage for each product
-                    prod_agg["Thermal_pct"] = (prod_agg["Energy_thermal_kWh"] / prod_agg["Energy_kWh"] * 100).round(1)
-                    prod_agg["Electrical_pct"] = (prod_agg["Energy_electrical_kWh"] / prod_agg["Energy_kWh"] * 100).round(1)
-                    
-                    fig_comparison.add_trace(go.Bar(
-                        name='Thermal %',
-                        x=prod_agg['Produkt'],
-                        y=prod_agg['Thermal_pct'],
-                        marker_color='#FF6B6B',
-                        text=[f"{v:.1f}%" for v in prod_agg['Thermal_pct']],
-                        textposition='inside'
-                    ))
-                    fig_comparison.add_trace(go.Bar(
-                        name='Electrical %',
-                        x=prod_agg['Produkt'],
-                        y=prod_agg['Electrical_pct'],
-                        marker_color='#4ECDC4',
-                        text=[f"{v:.1f}%" for v in prod_agg['Electrical_pct']],
-                        textposition='inside'
-                    ))
-                    fig_comparison.update_layout(
-                        title="Energy Mix by Product (Thermal vs Electrical %)",
-                        xaxis_title="Product",
-                        yaxis_title="Percentage (%)",
-                        barmode='stack',
-                        height=400,
-                        plot_bgcolor="white"
-                    )
-                    st.plotly_chart(fig_comparison, use_container_width=True)
-                
                 # Product summary table
                 st.subheader("Product Energy Summary")
                 prod_display = prod_agg.copy()
-                
-                # Add thermal percentage column
-                prod_display["Thermal %"] = prod_display["Thermal_pct"]
-                prod_display["Electrical %"] = prod_display["Electrical_pct"]
                 
                 prod_display = prod_display.rename(columns={
                     "Produkt": "Product",
                     "Energy_thermal_kWh": "Thermal (kWh)",
                     "Energy_electrical_kWh": "Electrical (kWh)",
                     "Energy_kWh": "Total (kWh)",
+                    "Thermal_pct": "Thermal %",
                     "Volume_m3": "Volume (m³)",
                     "Water_kg": "Water (kg)",
                     "kWh_per_m3": "kWh/m³",
@@ -592,6 +554,7 @@ if st.session_state.analysis_complete and st.session_state.results:
                     f"Average per product = **{avg_thermal_per_product:,.0f} kWh** | "
                     f"Highest consumer: **{max_thermal_product}** ({max_thermal_value:,.0f} kWh)"
                 )
+                
 
             # ===== 4. PRODUCT SPECIFICATIONS (MEASURED VALUES) =====
             st.markdown('<div class="section-header">📐 Product Specifications (MEASURED Values)</div>', unsafe_allow_html=True)
@@ -840,6 +803,7 @@ if st.session_state.analysis_complete and st.session_state.results:
         st.error(f"❌ Display error: {e}")
         with st.expander("Details"):
             st.exception(e)
+
 
 
 
