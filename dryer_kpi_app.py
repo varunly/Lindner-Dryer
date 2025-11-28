@@ -707,34 +707,7 @@ if st.session_state.analysis_complete and st.session_state.results:
                     # ========== SECTION 1: OVERALL TRENDS ==========
                     st.subheader("📈 Overall Performance Trends")
                     
-                    col_o1, col_o2 = st.columns(2)
-                    
-                    with col_o1:
-                        fig_overall_efficiency = px.line(
-                            monthly_overall,
-                            x="Month",
-                            y="kWh_per_m3",
-                            markers=True,
-                            title="Overall Energy Efficiency (kWh/m³)",
-                            labels={"kWh_per_m3": "kWh/m³", "Month": "Month"}
-                        )
-                        fig_overall_efficiency.update_traces(line_color='#667eea', line_width=3, marker=dict(size=10))
-                        fig_overall_efficiency.update_layout(height=350, plot_bgcolor="white", showlegend=False)
-                        st.plotly_chart(fig_overall_efficiency, use_container_width=True)
-                    
-                    with col_o2:
-                        fig_overall_specific = px.line(
-                            monthly_overall,
-                            x="Month",
-                            y="kWh_per_kg",
-                            markers=True,
-                            title="Overall Specific Energy (kWh/kg water)",
-                            labels={"kWh_per_kg": "kWh/kg", "Month": "Month"}
-                        )
-                        fig_overall_specific.update_traces(line_color='#f093fb', line_width=3, marker=dict(size=10))
-                        fig_overall_specific.update_layout(height=350, plot_bgcolor="white", showlegend=False)
-                        st.plotly_chart(fig_overall_specific, use_container_width=True)
-                    
+                                       
                     col_o3, col_o4 = st.columns(2)
                     
                     with col_o3:
@@ -1120,6 +1093,7 @@ if st.session_state.analysis_complete and st.session_state.results:
         st.error(f"❌ Display error: {e}")
         with st.expander("Details"):
             st.exception(e)
+
 
 
 
