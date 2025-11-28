@@ -25,6 +25,8 @@ try:
         PRODUCT_SPECIFICATIONS,
         SUSPENSION_KG,
         CONFIG,
+        safe_divide,
+    
     )
 except ImportError as e:
     st.error(f"❌ Unable to import dryer_kpi_monthly_final module: {e}")
@@ -1038,6 +1040,7 @@ if st.session_state.analysis_complete and st.session_state.results:
         st.error(f"❌ Display error: {e}")
         with st.expander("Details"):
             st.exception(e)
+
 
 
 
