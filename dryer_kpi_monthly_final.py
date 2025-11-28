@@ -61,7 +61,6 @@ PRODUCT_SPECIFICATIONS = {
         "water_per_mm_g": 88,
         "water_per_plate_kg": 3.01,
     },
-    # ✅ NEW: L32 (INTERPOLATED)
     "L32": {
         "product_type": "L",
         "final_thickness_mm": 32,
@@ -75,7 +74,7 @@ PRODUCT_SPECIFICATIONS = {
         "formula": "-0.049x + 107.1 (interpolated)",
         "water_per_mm_g": 90,
         "water_per_plate_kg": 3.33,
-        "interpolated": True,  # Flag to indicate this is interpolated
+        "interpolated": True,
     },
     "L34": {
         "product_type": "L",
@@ -119,7 +118,6 @@ PRODUCT_SPECIFICATIONS = {
         "water_per_mm_g": 91,
         "water_per_plate_kg": 4.11,
     },
-    # ✅ NEW: L40 (INTERPOLATED)
     "L40": {
         "product_type": "L",
         "final_thickness_mm": 40,
@@ -133,7 +131,7 @@ PRODUCT_SPECIFICATIONS = {
         "formula": "-0.033x + 92.4 (interpolated)",
         "water_per_mm_g": 82,
         "water_per_plate_kg": 3.94,
-        "interpolated": True,  # Flag to indicate this is interpolated
+        "interpolated": True,
     },
     "L42": {
         "product_type": "L",
@@ -206,6 +204,7 @@ PRODUCT_SPECIFICATIONS = {
         "water_per_plate_kg": 8.30,
     },
 }
+
 for product, spec in PRODUCT_SPECIFICATIONS.items():
     spec["water_per_m3_kg"] = spec["water_per_plate_kg"] / spec["volume_m3"]
 
@@ -213,6 +212,18 @@ WATER_PER_M3_KG = {
     product: spec["water_per_m3_kg"]
     for product, spec in PRODUCT_SPECIFICATIONS.items()
 }
+
+
+# ✅ ADD THIS FUNCTION
+def safe_divide(numerator, denominator, default=0.0):
+    """Safe division that handles zero and NaN values."""
+    with np.errstate(divide='ignore', invalid='ignore'):
+        result = np.where(
+            (denominator != 0) & (~np.isnan(denominator)) & (np.isfinite(denominator)),
+            numerator / denominator,
+            default
+        )
+    return np.nan_to_num(result, nan=default, posinf=default, neginf=default)
 
 
 def parse_duration_series(s: pd.Series) -> pd.Series:
@@ -256,6 +267,11 @@ def parse_energy(df: pd.DataFrame) -> pd.DataFrame:
         else:
             df[thermal_col] = 0.0
             logger.warning(f"  {z_key}: Gas column not found")
+
+    # Total thermal across all zones for each hour
+    thermal_cols = [f"E_thermal_{z_name}_kWh" for z_name in ZONE_ENERGY_MAPPING.values()]
+    existing_thermal_cols = [c for c in thermal_cols if c in df.columns]
+    df["E_thermal_total_kWh"] = df[existing_thermal_cols].sum(axis=1)
 
     # Electrical energy
     if "Energieverbrauch, elektr. [kWh]" in df.columns:
@@ -401,16 +417,8 @@ def explode_intervals(df: pd.DataFrame) -> pd.DataFrame:
 def allocate_energy(e: pd.DataFrame, ivals: pd.DataFrame) -> pd.DataFrame:
     """
     FIXED: Allocate energy correctly preserving thermal/electrical ratio.
-    
-    The key insight: We should NOT multiply electrical by overlap.
-    Instead, we distribute the HOURLY electrical proportionally.
     """
     logger.info("Allocating energy to products (FIXED allocation)...")
-    
-    # First, get total electrical per hour for later distribution
-    e_hourly = e.groupby("E_start").agg({
-        "E_el_kWh": "first"  # Electrical is same for all zones in an hour
-    }).reset_index()
     
     results = []
 
@@ -418,12 +426,14 @@ def allocate_energy(e: pd.DataFrame, ivals: pd.DataFrame) -> pd.DataFrame:
         thermal_col = f"E_thermal_{z_name}_kWh"
 
         if thermal_col not in e.columns:
+            logger.warning(f"Thermal column {thermal_col} not found")
             continue
 
         e_zone = e[e[thermal_col] > 0].copy()
         iv_zone = ivals[ivals["Zone"] == z_key].copy()
 
         if e_zone.empty or iv_zone.empty:
+            logger.info(f"Skipping {z_key}: no data (energy: {len(e_zone)}, intervals: {len(iv_zone)})")
             continue
 
         logger.info(f"Processing {z_key}: {len(e_zone)} hours × {len(iv_zone)} intervals")
@@ -465,26 +475,21 @@ def allocate_energy(e: pd.DataFrame, ivals: pd.DataFrame) -> pd.DataFrame:
             if merged.empty:
                 continue
 
-            # Calculate proportional share per hour
-            merged["E_hour_key"] = merged["E_start"].astype(str)
+            # Create hour key for grouping
+            merged["E_hour_key"] = merged["E_start"].dt.strftime("%Y-%m-%d %H:00")
             
-            # Sum of overlaps per hour (for normalization)
+            # Sum of overlaps per hour (for normalization within this zone)
             hour_total_overlap = merged.groupby("E_hour_key")["Overlap_h"].transform("sum")
             
-            # Each product's share of this hour
-            merged["Hour_share"] = merged["Overlap_h"] / hour_total_overlap.replace(0, 1)
+            # Each product's share of this hour in this zone
+            merged["Hour_share"] = safe_divide(merged["Overlap_h"], hour_total_overlap)
             
-            # ✅ THERMAL: Zone thermal × share (correct)
+            # ✅ THERMAL: Zone thermal × share
             merged["Energy_thermal_kWh"] = merged[thermal_col] * merged["Hour_share"]
             
-            # ✅ ELECTRICAL: Distribute hourly electrical across ALL zones and products
-            # Step 1: Electrical per zone = Total / 4 zones
-            # Step 2: Distribute to products by their share
-            electrical_per_zone_hour = merged["E_el_kWh"] / CONFIG["num_thermal_zones"]
-            merged["Energy_electrical_kWh"] = electrical_per_zone_hour * merged["Hour_share"]
+            # Store info for electrical allocation later
+            merged["Zone"] = z_key
             
-            merged.drop("E_hour_key", axis=1, inplace=True)
-
             # Month handling
             if "Month_e" in merged.columns:
                 month_col = "Month_e"
@@ -496,60 +501,89 @@ def allocate_energy(e: pd.DataFrame, ivals: pd.DataFrame) -> pd.DataFrame:
 
             result = merged[[
                 month_col, "Produkt", "m3", "Overlap_h", "Hour_share",
-                "Energy_thermal_kWh", "Energy_electrical_kWh"
+                "Energy_thermal_kWh", "Zone", "E_hour_key", "E_el_kWh"
             ]].copy()
             result = result.rename(columns={month_col: "Month"})
-            result["Zone"] = z_key
 
             zone_res.append(result)
 
         if zone_res:
-            results.append(pd.concat(zone_res, ignore_index=True))
+            zone_df = pd.concat(zone_res, ignore_index=True)
+            results.append(zone_df)
 
-    if results:
-        final = pd.concat(results, ignore_index=True)
-        final["Energy_share_kWh"] = final["Energy_thermal_kWh"] + final["Energy_electrical_kWh"]
-        
-        # Remove invalid
-        final = final[
-            (final["Energy_thermal_kWh"] >= 0) &
-            (final["Energy_electrical_kWh"] >= 0) &
-            (final["m3"] > 0)
-        ].copy()
-        
-        # Verify ratio
-        total_th = final["Energy_thermal_kWh"].sum()
-        total_el = final["Energy_electrical_kWh"].sum()
-        
-        if total_el > 0:
-            ratio = total_th / total_el
-            pct_el = (total_el / (total_th + total_el)) * 100
-            logger.info(f"✓ Allocated: Thermal={total_th:,.0f} kWh, Electrical={total_el:,.0f} kWh")
-            logger.info(f"✓ Ratio: {ratio:.1f}x | Electrical: {pct_el:.1f}%")
-        
-        logger.info(f"Allocated {len(final)} records")
-        return final
+    if not results:
+        logger.warning("No allocation results!")
+        return pd.DataFrame(columns=[
+            "Month", "Produkt", "Zone", "Energy_thermal_kWh", 
+            "Energy_electrical_kWh", "Energy_share_kWh", "Overlap_h", "Hour_share", "m3"
+        ])
+
+    # Combine all zones
+    final = pd.concat(results, ignore_index=True)
     
-    return pd.DataFrame(columns=[
-        "Month", "Produkt", "Zone", "Energy_thermal_kWh", 
-        "Energy_electrical_kWh", "Energy_share_kWh", "Overlap_h", "Hour_share", "m3"
-    ])
+    # ✅ ELECTRICAL: Distribute each hour's electrical across ALL products in ALL zones
+    hour_totals = final.groupby("E_hour_key").agg({
+        "Overlap_h": "sum",
+        "E_el_kWh": "first"
+    }).reset_index()
+    hour_totals = hour_totals.rename(columns={"Overlap_h": "total_overlap_all_zones"})
+    
+    # Merge back
+    final = final.merge(hour_totals[["E_hour_key", "total_overlap_all_zones"]], on="E_hour_key", how="left")
+    
+    # Calculate global share (across all zones)
+    final["Global_share"] = safe_divide(final["Overlap_h"], final["total_overlap_all_zones"])
+    
+    # Electrical allocation based on global share
+    final["Energy_electrical_kWh"] = final["E_el_kWh"] * final["Global_share"]
+    
+    # Total energy
+    final["Energy_share_kWh"] = final["Energy_thermal_kWh"] + final["Energy_electrical_kWh"]
+    
+    # Cleanup
+    final = final.drop(columns=["E_hour_key", "E_el_kWh", "total_overlap_all_zones", "Global_share"], errors='ignore')
+    
+    # Remove invalid
+    final = final[
+        (final["Energy_thermal_kWh"] >= 0) &
+        (final["Energy_electrical_kWh"] >= 0) &
+        (final["m3"] > 0)
+    ].copy()
+    
+    # Verify ratio
+    total_th = final["Energy_thermal_kWh"].sum()
+    total_el = final["Energy_electrical_kWh"].sum()
+    total_energy = total_th + total_el
+    
+    if total_el > 0:
+        ratio = total_th / total_el
+        pct_el = (total_el / total_energy) * 100
+        pct_th = (total_th / total_energy) * 100
+        logger.info(f"✓ Allocated: Thermal={total_th:,.0f} kWh ({pct_th:.1f}%), Electrical={total_el:,.0f} kWh ({pct_el:.1f}%)")
+        logger.info(f"✓ Ratio: Thermal/Electrical = {ratio:.1f}x")
+    
+    logger.info(f"Allocated {len(final)} records")
+    return final
 
 
 def add_water_kpis(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
+    
     df["water_per_m3_bench"] = df["Produkt"].map(WATER_PER_M3_KG)
-    df["water_per_m3_bench"] = df["water_per_m3_bench"].fillna(pd.Series(WATER_PER_M3_KG).mean())
+    default_water = np.mean(list(WATER_PER_M3_KG.values())) if WATER_PER_M3_KG else 200.0
+    df["water_per_m3_bench"] = df["water_per_m3_bench"].fillna(default_water)
+    
     df["Water_kg"] = df["Volume_m3"] * df["water_per_m3_bench"]
     
-    df["kWh_thermal_per_m3"] = np.where(df["Volume_m3"] > 0, df["Energy_thermal_kWh"] / df["Volume_m3"], 0)
-    df["kWh_per_m3"] = np.where(df["Volume_m3"] > 0, df["Energy_kWh"] / df["Volume_m3"], 0)
-    df["kWh_thermal_per_kg"] = np.where(df["Water_kg"] > 0, df["Energy_thermal_kWh"] / df["Water_kg"], 0)
-    df["kWh_per_kg"] = np.where(df["Water_kg"] > 0, df["Energy_kWh"] / df["Water_kg"], 0)
+    df["kWh_thermal_per_m3"] = safe_divide(df["Energy_thermal_kWh"], df["Volume_m3"])
+    df["kWh_per_m3"] = safe_divide(df["Energy_kWh"], df["Volume_m3"])
+    df["kWh_thermal_per_kg"] = safe_divide(df["Energy_thermal_kWh"], df["Water_kg"])
+    df["kWh_per_kg"] = safe_divide(df["Energy_kWh"], df["Water_kg"])
     
     for col in ["kWh_thermal_per_m3", "kWh_per_m3", "kWh_thermal_per_kg", "kWh_per_kg"]:
         if col in df.columns:
             df[col] = df[col].clip(lower=0)
+    
     return df
 
 
@@ -620,17 +654,17 @@ def predict_production_energy(
         
         product_result = {
             "product": product,
-            "volume_m3": volume_m3,
-            "water_per_m3_kg": water_per_m3,
-            "water_kg": water_kg,
-            "num_plates": num_plates,
-            "water_per_plate_kg": water_per_plate,
+            "volume_m3": round(volume_m3, 3),
+            "water_per_m3_kg": round(water_per_m3, 1),
+            "water_kg": round(water_kg, 1),
+            "num_plates": round(num_plates, 0) if num_plates else None,
+            "water_per_plate_kg": round(water_per_plate, 2) if water_per_plate else None,
             "water_per_mm_g": water_per_mm,
             "formula": formula,
         }
         
         if energy_from_water:
-            product_result["energy_from_water_kwh"] = energy_from_water
+            product_result["energy_from_water_kwh"] = round(energy_from_water, 0)
         
         results["products"].append(product_result)
         results["total_volume_m3"] += volume_m3
@@ -672,8 +706,11 @@ def compute_product_wagon_stats(wagons: pd.DataFrame) -> dict:
 
 
 def main():
-    logger.info("Module loaded.")
+    logger.info("Module loaded successfully.")
+    logger.info(f"Configured for {len(PRODUCT_SPECIFICATIONS)} products")
+    logger.info(f"Zones: {CONFIG['zones_seq']}")
+    logger.info(f"Thermal zones mapped: {list(ZONE_ENERGY_MAPPING.keys())}")
+
 
 if __name__ == "__main__":
     main()
-
