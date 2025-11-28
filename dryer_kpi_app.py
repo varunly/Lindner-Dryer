@@ -108,8 +108,8 @@ with st.sidebar:
 
     products = st.multiselect(
         "🧱 Product(s):",
-        ["L28", "L30", "L34", "L36", "L38", "L42", "L44", "N40", "N44", "Y44"],
-        default=["L36", "L38", "N40"],
+        ["L28", "L30", "L32", "L34", "L36", "L38","L40", "L42", "L44", "N40", "N44", "Y44"],
+        default=["L28", "L30", "L32", "L34", "L36", "L38","L40", "L42", "L44", "N40", "N44", "Y44"],
     )
 
     month = st.number_input(
@@ -747,3 +747,4 @@ if st.session_state.analysis_complete and st.session_state.results:
         st.error(f"❌ Display error: {e}")
         with st.expander("Details"):
             st.exception(e)
+
