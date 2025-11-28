@@ -349,11 +349,9 @@ if st.session_state.analysis_complete and st.session_state.results:
                 st.markdown(create_kpi_card("Total Volume", total_volume, "m³"), unsafe_allow_html=True)
             with c4:
                 st.markdown(create_kpi_card("Avg kWh/m³", avg_kwh_per_m3, "kWh/m³"), unsafe_allow_html=True)
-            with c5:
-                st.markdown(create_kpi_card("Avg kWh/kg", avg_kwh_per_kg, "kWh/kg"), unsafe_allow_html=True)
+         
             
             electrical_pct = (total_electrical / total_energy * 100) if total_energy > 0 else 0
-            st.info(f"⚡ Electrical energy represents **{electrical_pct:.1f}%** of total energy consumption | 💧 Total water evaporated: **{total_water:,.0f} kg**")
 
             # ===== 2. ZONE COMPARISON (MOVED UP) =====
             st.markdown('<div class="section-header">📉 Zone Comparison</div>', unsafe_allow_html=True)
@@ -1142,6 +1140,7 @@ if st.session_state.analysis_complete and st.session_state.results:
         st.error(f"❌ Display error: {e}")
         with st.expander("Details"):
             st.exception(e)
+
 
 
 
