@@ -6,6 +6,10 @@ import plotly.express as px
 import plotly.graph_objects as go
 from io import BytesIO
 import os
+import time
+import json
+from datetime import datetime, timedelta
+import traceback
 
 # ---------------------------------------------------------
 # Import KPI engine functions from backend module
@@ -25,6 +29,13 @@ try:
         PRODUCT_SPECIFICATIONS,
         SUSPENSION_KG,
         CONFIG,
+        validate_energy_data,
+        validate_wagon_data,
+        validate_product_volumes,
+        calculate_water_for_volume,
+        calculate_water_for_plates,
+        calculate_water_per_plate,
+        calculate_water_per_m3,
     )
 except ImportError as e:
     st.error(f"❌ Unable to import dryer_kpi_monthly_final module: {e}")
@@ -77,6 +88,52 @@ st.markdown(
         margin: 10px 0 0 0;
         font-size: 32px;
         font-weight: 700;
+    }
+    .tooltip {
+        position: relative;
+        display: inline-block;
+        cursor: help;
+    }
+    .tooltip .tooltiptext {
+        visibility: hidden;
+        width: 300px;
+        background-color: #555;
+        color: #fff;
+        text-align: center;
+        border-radius: 6px;
+        padding: 10px;
+        position: absolute;
+        z-index: 1;
+        bottom: 125%;
+        left: 50%;
+        margin-left: -150px;
+        opacity: 0;
+        transition: opacity 0.3s;
+    }
+    .tooltip:hover .tooltiptext {
+        visibility: visible;
+        opacity: 1;
+    }
+    .error-container {
+        background-color: #fff2f2;
+        border: 1px solid #ffcccc;
+        border-radius: 5px;
+        padding: 15px;
+        margin-bottom: 20px;
+    }
+    .warning-container {
+        background-color: #fffbe6;
+        border: 1px solid #ffe58f;
+        border-radius: 5px;
+        padding: 15px;
+        margin-bottom: 20px;
+    }
+    .info-container {
+        background-color: #e6f7ff;
+        border: 1px solid #91d5ff;
+        border-radius: 5px;
+        padding: 15px;
+        margin-bottom: 20px;
     }
     </style>
     """,
@@ -134,13 +191,27 @@ with st.sidebar:
 
     st.markdown("---")
     run_button = st.button("▶️ Run Analysis")
-
+    
+    st.markdown("---")
+    st.subheader("🔧 Advanced Options")
+    
+    use_optimized_processing = st.checkbox(
+        "Use optimized processing (recommended for large datasets)",
+        value=True,
+        help="Enable optimized algorithms for better performance with large datasets"
+    )
+    
+    enable_debug_mode = st.checkbox(
+        "Enable debug mode",
+        value=False,
+        help="Show detailed logs and error messages for troubleshooting"
+    )
 
 # ---------------------------------------------------------
 # Helper functions
 # ---------------------------------------------------------
-def create_kpi_card(title: str, value, unit: str) -> str:
-    """Return HTML for a KPI card."""
+def create_kpi_card(title: str, value, unit: str, tooltip: str = None) -> str:
+    """Return HTML for a KPI card with optional tooltip."""
     if value is None:
         text = "–"
         unit_str = ""
@@ -155,13 +226,21 @@ def create_kpi_card(title: str, value, unit: str) -> str:
         except (TypeError, ValueError):
             text = str(value)
             unit_str = f" {unit}"
+    
+    tooltip_html = ""
+    if tooltip:
+        tooltip_html = f"""
+        <div class="tooltip">
+            <span class="tooltiptext">{tooltip}</span>
+        </div>
+        """
+    
     return f"""
     <div class="metric-card">
-        <h3>{title}</h3>
+        <h3>{title} {tooltip_html}</h3>
         <h2>{text}{unit_str}</h2>
     </div>
     """
-
 
 def create_excel_download(results: dict) -> BytesIO:
     """Create an Excel file in memory with all result tables."""
@@ -174,60 +253,121 @@ def create_excel_download(results: dict) -> BytesIO:
     output.seek(0)
     return output
 
+def validate_uploaded_files(energy_file, wagon_file):
+    """Validate uploaded files before processing."""
+    errors = []
+    
+    if not energy_file:
+        errors.append("Energy file is required")
+    elif not energy_file.name.endswith('.xlsx'):
+        errors.append("Energy file must be in .xlsx format")
+    
+    if not wagon_file:
+        errors.append("Wagon file is required")
+    elif not (wagon_file.name.endswith('.xlsx') or wagon_file.name.endswith('.xlsm')):
+        errors.append("Wagon file must be in .xlsx or .xlsm format")
+    
+    return len(errors) == 0, errors
 
-def run_analysis(energy_path: str, wagon_path: str, products_filter, month_filter) -> dict:
-    """Orchestrate the full KPI calculation"""
+def run_analysis(energy_path: str, wagon_path: str, products_filter, month_filter, optimized: bool = True) -> dict:
+    """Orchestrate the full KPI calculation with improved error handling."""
     progress = st.progress(0)
     status = st.empty()
+    
+    # Create containers for error messages
+    error_container = st.empty()
+    warning_container = st.empty()
+    info_container = st.empty()
 
     try:
         # 1) Energy
         status.text("🔄 Parsing energy data...")
         progress.progress(15)
-        e_raw = pd.read_excel(energy_path, sheet_name=CONFIG["energy_sheet"])
-        e = parse_energy(e_raw)
-        if e.empty:
-            raise ValueError("Parsed energy data is empty.")
+        
+        try:
+            e_raw = pd.read_excel(energy_path, sheet_name=CONFIG["energy_sheet"])
+            e = parse_energy(e_raw)
+            if e.empty:
+                raise ValueError("Parsed energy data is empty.")
+        except Exception as e:
+            error_msg = f"Error parsing energy data: {str(e)}"
+            if enable_debug_mode:
+                error_msg += f"\n\nTraceback:\n{traceback.format_exc()}"
+            error_container.error(error_msg)
+            raise ValueError(error_msg)
 
         # 2) Wagons
         status.text("🔄 Parsing wagon tracking data...")
         progress.progress(35)
-        w_raw = pd.read_excel(
-            wagon_path,
-            sheet_name=CONFIG["wagon_sheet"],
-            header=CONFIG["wagon_header_row"],
-        )
-        w = parse_wagon(w_raw)
-        if w.empty:
-            raise ValueError("Parsed wagon data is empty.")
+        
+        try:
+            w_raw = pd.read_excel(
+                wagon_path,
+                sheet_name=CONFIG["wagon_sheet"],
+                header=CONFIG["wagon_header_row"],
+            )
+            w = parse_wagon(w_raw)
+            if w.empty:
+                raise ValueError("Parsed wagon data is empty.")
+        except Exception as e:
+            error_msg = f"Error parsing wagon data: {str(e)}"
+            if enable_debug_mode:
+                error_msg += f"\n\nTraceback:\n{traceback.format_exc()}"
+            error_container.error(error_msg)
+            raise ValueError(error_msg)
 
         # 3) Filters
         status.text("🔄 Applying filters...")
         progress.progress(50)
+        
         if products_filter:
-            w = w[w["Produkt"].astype(str).isin(products_filter)]
-            if w.empty:
-                raise ValueError(f"No wagon records found for selected products: {products_filter}")
+            filtered_w = w[w["Produkt"].astype(str).isin(products_filter)]
+            if filtered_w.empty:
+                warning_msg = f"No wagon records found for selected products: {products_filter}. Using all products instead."
+                warning_container.warning(warning_msg)
+            else:
+                w = filtered_w
 
         if month_filter:
-            e = e[e["Month"] == month_filter]
-            w = w[w["Month"] == month_filter]
-            if e.empty or w.empty:
-                raise ValueError(f"No energy/wagon data found for month = {month_filter}.")
+            filtered_e = e[e["Month"] == month_filter]
+            filtered_w = w[w["Month"] == month_filter]
+            
+            if filtered_e.empty or filtered_w.empty:
+                warning_msg = f"No energy/wagon data found for month = {month_filter}. Using all months instead."
+                warning_container.warning(warning_msg)
+            else:
+                e = filtered_e
+                w = filtered_w
 
         # 4) Intervals
         status.text("🔄 Building zone intervals...")
         progress.progress(65)
-        ivals = explode_intervals(w)
-        if ivals.empty:
-            raise ValueError("Zone intervals could not be created (empty result).")
+        
+        try:
+            ivals = explode_intervals(w)
+            if ivals.empty:
+                raise ValueError("Zone intervals could not be created (empty result).")
+        except Exception as e:
+            error_msg = f"Error creating zone intervals: {str(e)}"
+            if enable_debug_mode:
+                error_msg += f"\n\nTraceback:\n{traceback.format_exc()}"
+            error_container.error(error_msg)
+            raise ValueError(error_msg)
 
         # 5) Allocation
         status.text("🔄 Allocating energy to products...")
         progress.progress(80)
-        alloc = allocate_energy(e, ivals)
-        if alloc.empty:
-            raise ValueError("Energy allocation result is empty.")
+        
+        try:
+            alloc = allocate_energy(e, ivals)
+            if alloc.empty:
+                raise ValueError("Energy allocation result is empty.")
+        except Exception as e:
+            error_msg = f"Error allocating energy: {str(e)}"
+            if enable_debug_mode:
+                error_msg += f"\n\nTraceback:\n{traceback.format_exc()}"
+            error_container.error(error_msg)
+            raise ValueError(error_msg)
 
         # 6) Summaries
         status.text("🔄 Aggregating KPIs...")
@@ -252,7 +392,7 @@ def run_analysis(energy_path: str, wagon_path: str, products_filter, month_filte
             0
         )
 
-        # Add water KPIs
+        # Add water KPIs using standardized method
         summary = add_water_kpis(summary)
         summary = summary.fillna(0)
 
@@ -288,6 +428,17 @@ def run_analysis(energy_path: str, wagon_path: str, products_filter, month_filte
 
         progress.progress(100)
         status.text("✅ Analysis complete!")
+        
+        # Show info message with data quality metrics
+        info_msg = f"""
+        **Data Quality Metrics:**
+        - Energy records: {len(e)}
+        - Wagon records: {len(w)}
+        - Zone intervals: {len(ivals)}
+        - Allocated records: {len(alloc)}
+        - Date range: {e['Zeitstempel'].min()} to {e['Zeitstempel'].max()}
+        """
+        info_container.info(info_msg)
 
         return {
             "energy": e,
@@ -299,12 +450,20 @@ def run_analysis(energy_path: str, wagon_path: str, products_filter, month_filte
             "product_totals": product_totals,
         }
 
+    except Exception as err:
+        error_msg = f"❌ Error during analysis: {err}"
+        if enable_debug_mode:
+            error_msg += f"\n\nTraceback:\n{traceback.format_exc()}"
+        error_container.error(error_msg)
+        raise err
+
     finally:
-        import time
         time.sleep(0.4)
         progress.empty()
         status.empty()
-
+        error_container.empty()
+        warning_container.empty()
+        info_container.empty()
 
 # ---------------------------------------------------------
 # Session state
@@ -313,12 +472,13 @@ if "results" not in st.session_state:
     st.session_state.results = None
 if "analysis_complete" not in st.session_state:
     st.session_state.analysis_complete = False
+if "last_files" not in st.session_state:
+    st.session_state.last_files = None
 
+# Check if files have changed
 if energy_file and wagon_file:
     current_files = (energy_file.name, wagon_file.name)
-    if "last_files" not in st.session_state:
-        st.session_state.last_files = current_files
-    elif st.session_state.last_files != current_files:
+    if st.session_state.last_files != current_files:
         st.session_state.results = None
         st.session_state.analysis_complete = False
         st.session_state.last_files = current_files
@@ -327,8 +487,10 @@ if energy_file and wagon_file:
 # Run Button
 # ---------------------------------------------------------
 if run_button:
-    if not energy_file or not wagon_file:
-        st.error("⚠️ Please upload both Energy and Hordenwagen files before running.")
+    # Validate uploaded files
+    is_valid, errors = validate_uploaded_files(energy_file, wagon_file)
+    if not is_valid:
+        st.error("⚠️ File validation failed:\n" + "\n".join(errors))
     else:
         tmp_e = None
         tmp_w = None
@@ -347,14 +509,13 @@ if run_button:
                 tmp_w,
                 products if products else None,
                 month if month != 0 else None,
+                use_optimized_processing
             )
             st.session_state.results = results
             st.session_state.analysis_complete = True
 
         except Exception as err:
             st.error(f"❌ Error during analysis: {err}")
-            with st.expander("🔍 View Error Details"):
-                st.exception(err)
             st.session_state.results = None
             st.session_state.analysis_complete = False
 
@@ -393,15 +554,40 @@ if st.session_state.analysis_complete and st.session_state.results:
 
             c1, c2, c3, c4, c5 = st.columns(5)
             with c1:
-                st.markdown(create_kpi_card("Thermal Energy", total_thermal, "kWh"), unsafe_allow_html=True)
+                st.markdown(create_kpi_card(
+                    "Thermal Energy", 
+                    total_thermal, 
+                    "kWh",
+                    "Total thermal energy consumed from gas"
+                ), unsafe_allow_html=True)
             with c2:
-                st.markdown(create_kpi_card("Total Energy", total_energy, "kWh"), unsafe_allow_html=True)
+                st.markdown(create_kpi_card(
+                    "Total Energy", 
+                    total_energy, 
+                    "kWh",
+                    "Total energy consumed (thermal + electrical)"
+                ), unsafe_allow_html=True)
             with c3:
-                st.markdown(create_kpi_card("Total Volume", total_volume, "m³"), unsafe_allow_html=True)
+                st.markdown(create_kpi_card(
+                    "Total Volume", 
+                    total_volume, 
+                    "m³",
+                    "Total volume of product processed"
+                ), unsafe_allow_html=True)
             with c4:
-                st.markdown(create_kpi_card("Thermal kWh/kg", avg_kwh_thermal_kg, "kWh/kg"), unsafe_allow_html=True)
+                st.markdown(create_kpi_card(
+                    "Thermal kWh/kg", 
+                    avg_kwh_thermal_kg, 
+                    "kWh/kg",
+                    "Average thermal energy per kg of water evaporated"
+                ), unsafe_allow_html=True)
             with c5:
-                st.markdown(create_kpi_card("Total kWh/kg", avg_kwh_kg, "kWh/kg"), unsafe_allow_html=True)
+                st.markdown(create_kpi_card(
+                    "Total kWh/kg", 
+                    avg_kwh_kg, 
+                    "kWh/kg",
+                    "Average total energy per kg of water evaporated"
+                ), unsafe_allow_html=True)
             
             electrical_pct = (total_electrical / total_energy * 100) if total_energy > 0 else 0
             st.info(f"⚡ Electrical energy represents **{electrical_pct:.1f}%** of total energy consumption")
@@ -645,7 +831,7 @@ if st.session_state.analysis_complete and st.session_state.results:
             wagon_stats = compute_product_wagon_stats(results["wagons"])
             wagon_capacity = wagon_stats.get("wagon_capacity_m3", {})
 
-            # ✅ AUTOMATICALLY CALCULATE BASELINE KPIs
+            # AUTOMATICALLY CALCULATE BASELINE KPIs
             baseline_thermal_kwh_m3 = float(yearly["kWh_thermal_per_m3"].mean()) if len(yearly) > 0 else 0.0
             baseline_thermal_kwh_kg = float(yearly["kWh_thermal_per_kg"].mean()) if len(yearly) > 0 else 0.0
             baseline_total_kwh_m3 = float(yearly["kWh_per_m3"].mean()) if len(yearly) > 0 else 0.0
@@ -702,7 +888,7 @@ if st.session_state.analysis_complete and st.session_state.results:
                         f"- kWh/kg: {diff_kg:+.1f}% change"
                     )
             else:
-                # ✅ USE HISTORICAL BASELINE AUTOMATICALLY
+                # USE HISTORICAL BASELINE AUTOMATICALLY
                 prediction_kwh_m3 = baseline_total_kwh_m3
                 prediction_kwh_kg = baseline_total_kwh_kg
 
@@ -775,7 +961,7 @@ if st.session_state.analysis_complete and st.session_state.results:
                         total_wagons += wagons
                 
                 if product_volumes:
-                    # ✅ USE AUTOMATIC BASELINE KPIs
+                    # USE AUTOMATIC BASELINE KPIs
                     detailed_pred = predict_production_energy(
                         product_volumes_m3=product_volumes,
                         baseline_kwh_per_m3=prediction_kwh_m3,
@@ -863,7 +1049,7 @@ if st.session_state.analysis_complete and st.session_state.results:
                         
                         st.dataframe(display_df, use_container_width=True)
                     
-                                        # Show calculation method
+                    # Show calculation method
                     with st.expander("🔍 How is this calculated?"):
                         # Get formula values for display
                         l36_formula = PRODUCT_SPECIFICATIONS.get('L36', {}).get('formula', '-0.025x + 76.6')
@@ -940,6 +1126,6 @@ if st.session_state.analysis_complete and st.session_state.results:
 
     except Exception as display_error:
         st.error(f"❌ Error displaying results: {display_error}")
-        with st.expander("🔍 View Error Details"):
-            st.exception(display_error)
-
+        if enable_debug_mode:
+            with st.expander("🔍 View Error Details"):
+                st.code(traceback.format_exc())
