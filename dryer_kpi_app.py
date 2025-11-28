@@ -12,20 +12,19 @@ import os
 # ---------------------------------------------------------
 try:
     from dryer_kpi_monthly_final import (
-        parse_energy,
-        parse_wagon,
-        explode_intervals,
-        allocate_energy,
-        add_water_kpis,
-        compute_product_wagon_stats,
-        predict_production_energy,
-        calculate_water_per_m3_formula,
-        get_product_water_curve,
-        WATER_PER_M3_KG,
-        PRODUCT_SPECIFICATIONS,
-        WATER_FORMULAS,
-        CONFIG,
-    )
+    parse_energy,
+    parse_wagon,
+    explode_intervals,
+    allocate_energy,
+    add_water_kpis,
+    compute_product_wagon_stats,
+    predict_production_energy,
+    calculate_water_per_m3_formula,
+    get_product_water_curve,
+    WATER_PER_M3_KG,
+    PRODUCT_SPECIFICATIONS,
+    CONFIG,
+)
 except ImportError as e:
     st.error(f"❌ Unable to import dryer_kpi_monthly_final module: {e}")
     st.stop()
@@ -900,3 +899,4 @@ if st.session_state.analysis_complete and st.session_state.results:
         st.error(f"❌ Error displaying results: {display_error}")
         with st.expander("🔍 View Error Details"):
             st.exception(display_error)
+
