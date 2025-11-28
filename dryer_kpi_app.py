@@ -621,271 +621,318 @@ if st.session_state.analysis_complete and st.session_state.results:
                     st.plotly_chart(fig_curves, use_container_width=True)
                     st.info("⭐ **Star markers** = MEASURED values from production data")
 
-            # ===== 5. MONTHLY TRENDS (FIXED) =====
-                    st.markdown('<div class="section-header">📊 Monthly KPI Trends</div>', unsafe_allow_html=True)
+           # ===== 5. MONTHLY & WEEKLY TRENDS (COMPREHENSIVE) =====
+                    st.markdown('<div class="section-header">📊 Monthly & Weekly KPI Trends</div>', unsafe_allow_html=True)
                     
-                    # Add selector for trend view
-                    trend_view = st.radio(
-                        "View trends by:",
-                        ["By Product", "By Zone", "Overall"],
-                        horizontal=True,
-                        key="trend_view"
-                    )
+                    # Prepare aggregated data for different views
+                    # 1. By Product (across all zones)
+                    monthly_product = summary.groupby(["Month", "Produkt"], as_index=False).agg({
+                        "Energy_thermal_kWh": "sum",
+                        "Energy_electrical_kWh": "sum",
+                        "Energy_kWh": "sum",
+                        "Volume_m3": "sum",
+                        "Water_kg": "sum",
+                    })
+                    monthly_product["kWh_per_m3"] = safe_divide(monthly_product["Energy_kWh"], monthly_product["Volume_m3"])
+                    monthly_product["kWh_per_kg"] = safe_divide(monthly_product["Energy_kWh"], monthly_product["Water_kg"])
+                    monthly_product["kWh_thermal_per_m3"] = safe_divide(monthly_product["Energy_thermal_kWh"], monthly_product["Volume_m3"])
                     
-                    if trend_view == "By Product":
-                        # Aggregate by Month and Product (sum across all zones)
-                        monthly_product = summary.groupby(["Month", "Produkt"], as_index=False).agg({
-                            "Energy_thermal_kWh": "sum",
-                            "Energy_electrical_kWh": "sum",
-                            "Energy_kWh": "sum",
-                            "Volume_m3": "sum",
-                            "Water_kg": "sum",
+                    # 2. By Zone (across all products)
+                    monthly_zone = summary.groupby(["Month", "Zone"], as_index=False).agg({
+                        "Energy_thermal_kWh": "sum",
+                        "Energy_electrical_kWh": "sum",
+                        "Energy_kWh": "sum",
+                        "Volume_m3": "sum",
+                        "Water_kg": "sum",
+                    })
+                    monthly_zone["kWh_per_m3"] = safe_divide(monthly_zone["Energy_kWh"], monthly_zone["Volume_m3"])
+                    monthly_zone["kWh_per_kg"] = safe_divide(monthly_zone["Energy_kWh"], monthly_zone["Water_kg"])
+                    monthly_zone["kWh_thermal_per_m3"] = safe_divide(monthly_zone["Energy_thermal_kWh"], monthly_zone["Volume_m3"])
+                    
+                    # 3. Overall (total across everything)
+                    monthly_overall = summary.groupby(["Month"], as_index=False).agg({
+                        "Energy_thermal_kWh": "sum",
+                        "Energy_electrical_kWh": "sum",
+                        "Energy_kWh": "sum",
+                        "Volume_m3": "sum",
+                        "Water_kg": "sum",
+                    })
+                    monthly_overall["kWh_per_m3"] = safe_divide(monthly_overall["Energy_kWh"], monthly_overall["Volume_m3"])
+                    monthly_overall["kWh_per_kg"] = safe_divide(monthly_overall["Energy_kWh"], monthly_overall["Water_kg"])
+                    monthly_overall["kWh_thermal_per_m3"] = safe_divide(monthly_overall["Energy_thermal_kWh"], monthly_overall["Volume_m3"])
+                    monthly_overall["Thermal_pct"] = safe_divide(monthly_overall["Energy_thermal_kWh"], monthly_overall["Energy_kWh"]) * 100
+                    
+                    # 4. Weekly data (from energy data if available)
+                    if "energy" in results and not results["energy"].empty:
+                        energy_df = results["energy"].copy()
+                        energy_df["Week"] = energy_df["E_start"].dt.isocalendar().week
+                        energy_df["Year"] = energy_df["E_start"].dt.year
+                        
+                        weekly_energy = energy_df.groupby(["Year", "Week"], as_index=False).agg({
+                            "E_thermal_total_kWh": "sum",
+                            "E_el_kWh": "sum",
                         })
-                        
-                        # Calculate KPIs
-                        monthly_product["kWh_per_m3"] = safe_divide(monthly_product["Energy_kWh"], monthly_product["Volume_m3"])
-                        monthly_product["kWh_per_kg"] = safe_divide(monthly_product["Energy_kWh"], monthly_product["Water_kg"])
-                        monthly_product["kWh_thermal_per_m3"] = safe_divide(monthly_product["Energy_thermal_kWh"], monthly_product["Volume_m3"])
-                        monthly_product["kWh_thermal_per_kg"] = safe_divide(monthly_product["Energy_thermal_kWh"], monthly_product["Water_kg"])
-                        
-                        col_m1, col_m2 = st.columns(2)
-                        
-                        with col_m1:
-                            fig_kwh_m3 = px.line(
-                                monthly_product,
-                                x="Month",
-                                y="kWh_per_m3",
-                                color="Produkt",
-                                markers=True,
-                                title="Energy Efficiency Trend by Product (kWh/m³)",
-                                labels={"kWh_per_m3": "kWh/m³", "Month": "Month"}
-                            )
-                            fig_kwh_m3.update_layout(height=400, plot_bgcolor="white")
-                            st.plotly_chart(fig_kwh_m3, use_container_width=True)
+                        weekly_energy["Total_kWh"] = weekly_energy["E_thermal_total_kWh"] + weekly_energy["E_el_kWh"]
+                        weekly_energy["Week_Label"] = weekly_energy["Year"].astype(str) + "-W" + weekly_energy["Week"].astype(str).str.zfill(2)
+                    else:
+                        weekly_energy = None
                     
-                        with col_m2:
-                            fig_kwh_kg = px.line(
-                                monthly_product,
-                                x="Month",
-                                y="kWh_per_kg",
-                                color="Produkt",
-                                markers=True,
-                                title="Specific Energy Trend by Product (kWh/kg water)",
-                                labels={"kWh_per_kg": "kWh/kg", "Month": "Month"}
-                            )
-                            fig_kwh_kg.update_layout(height=400, plot_bgcolor="white")
-                            st.plotly_chart(fig_kwh_kg, use_container_width=True)
-                        
-                        # Additional charts for products
-                        col_m3, col_m4 = st.columns(2)
-                        
-                        with col_m3:
-                            fig_thermal = px.line(
-                                monthly_product,
-                                x="Month",
-                                y="kWh_thermal_per_m3",
-                                color="Produkt",
-                                markers=True,
-                                title="Thermal Energy Efficiency by Product (kWh/m³)",
-                                labels={"kWh_thermal_per_m3": "Thermal kWh/m³", "Month": "Month"}
-                            )
-                            fig_thermal.update_layout(height=400, plot_bgcolor="white")
-                            st.plotly_chart(fig_thermal, use_container_width=True)
-                        
-                        with col_m4:
-                            fig_volume = px.line(
-                                monthly_product,
-                                x="Month",
-                                y="Volume_m3",
-                                color="Produkt",
-                                markers=True,
-                                title="Production Volume by Product (m³)",
-                                labels={"Volume_m3": "Volume (m³)", "Month": "Month"}
-                            )
-                            fig_volume.update_layout(height=400, plot_bgcolor="white")
-                            st.plotly_chart(fig_volume, use_container_width=True)
+                    # ========== SECTION 1: OVERALL TRENDS ==========
+                    st.subheader("📈 Overall Performance Trends")
                     
-                    elif trend_view == "By Zone":
-                        # Aggregate by Month and Zone (sum across all products)
-                        monthly_zone = summary.groupby(["Month", "Zone"], as_index=False).agg({
-                            "Energy_thermal_kWh": "sum",
-                            "Energy_electrical_kWh": "sum",
-                            "Energy_kWh": "sum",
-                            "Volume_m3": "sum",
-                            "Water_kg": "sum",
-                        })
-                        
-                        # Calculate KPIs
-                        monthly_zone["kWh_per_m3"] = safe_divide(monthly_zone["Energy_kWh"], monthly_zone["Volume_m3"])
-                        monthly_zone["kWh_per_kg"] = safe_divide(monthly_zone["Energy_kWh"], monthly_zone["Water_kg"])
-                        monthly_zone["kWh_thermal_per_m3"] = safe_divide(monthly_zone["Energy_thermal_kWh"], monthly_zone["Volume_m3"])
-                        monthly_zone["kWh_thermal_per_kg"] = safe_divide(monthly_zone["Energy_thermal_kWh"], monthly_zone["Water_kg"])
-                        
-                        col_m1, col_m2 = st.columns(2)
-                        
-                        with col_m1:
-                            fig_kwh_m3 = px.line(
-                                monthly_zone,
-                                x="Month",
-                                y="kWh_per_m3",
-                                color="Zone",
-                                markers=True,
-                                title="Energy Efficiency Trend by Zone (kWh/m³)",
-                                labels={"kWh_per_m3": "kWh/m³", "Month": "Month"}
-                            )
-                            fig_kwh_m3.update_layout(height=400, plot_bgcolor="white")
-                            st.plotly_chart(fig_kwh_m3, use_container_width=True)
+                    col_o1, col_o2 = st.columns(2)
                     
-                        with col_m2:
-                            fig_kwh_kg = px.line(
-                                monthly_zone,
-                                x="Month",
-                                y="kWh_per_kg",
-                                color="Zone",
-                                markers=True,
-                                title="Specific Energy Trend by Zone (kWh/kg water)",
-                                labels={"kWh_per_kg": "kWh/kg", "Month": "Month"}
-                            )
-                            fig_kwh_kg.update_layout(height=400, plot_bgcolor="white")
-                            st.plotly_chart(fig_kwh_kg, use_container_width=True)
-                        
-                        # Additional charts for zones
-                        col_m3, col_m4 = st.columns(2)
-                        
-                        with col_m3:
-                            fig_thermal = px.line(
-                                monthly_zone,
-                                x="Month",
-                                y="Energy_thermal_kWh",
-                                color="Zone",
-                                markers=True,
-                                title="Thermal Energy Consumption by Zone (kWh)",
-                                labels={"Energy_thermal_kWh": "Thermal Energy (kWh)", "Month": "Month"}
-                            )
-                            fig_thermal.update_layout(height=400, plot_bgcolor="white")
-                            st.plotly_chart(fig_thermal, use_container_width=True)
-                        
-                        with col_m4:
-                            fig_volume = px.line(
-                                monthly_zone,
-                                x="Month",
-                                y="Volume_m3",
-                                color="Zone",
-                                markers=True,
-                                title="Production Volume by Zone (m³)",
-                                labels={"Volume_m3": "Volume (m³)", "Month": "Month"}
-                            )
-                            fig_volume.update_layout(height=400, plot_bgcolor="white")
-                            st.plotly_chart(fig_volume, use_container_width=True)
+                    with col_o1:
+                        fig_overall_efficiency = px.line(
+                            monthly_overall,
+                            x="Month",
+                            y="kWh_per_m3",
+                            markers=True,
+                            title="Overall Energy Efficiency (kWh/m³)",
+                            labels={"kWh_per_m3": "kWh/m³", "Month": "Month"}
+                        )
+                        fig_overall_efficiency.update_traces(line_color='#667eea', line_width=3, marker=dict(size=10))
+                        fig_overall_efficiency.update_layout(height=350, plot_bgcolor="white", showlegend=False)
+                        st.plotly_chart(fig_overall_efficiency, use_container_width=True)
                     
-                    else:  # Overall
-                        # Aggregate by Month only (sum across all products and zones)
-                        monthly_overall = summary.groupby(["Month"], as_index=False).agg({
-                            "Energy_thermal_kWh": "sum",
-                            "Energy_electrical_kWh": "sum",
-                            "Energy_kWh": "sum",
-                            "Volume_m3": "sum",
-                            "Water_kg": "sum",
-                        })
-                        
-                        # Calculate KPIs
-                        monthly_overall["kWh_per_m3"] = safe_divide(monthly_overall["Energy_kWh"], monthly_overall["Volume_m3"])
-                        monthly_overall["kWh_per_kg"] = safe_divide(monthly_overall["Energy_kWh"], monthly_overall["Water_kg"])
-                        monthly_overall["kWh_thermal_per_m3"] = safe_divide(monthly_overall["Energy_thermal_kWh"], monthly_overall["Volume_m3"])
-                        monthly_overall["kWh_thermal_per_kg"] = safe_divide(monthly_overall["Energy_thermal_kWh"], monthly_overall["Water_kg"])
-                        monthly_overall["Thermal_pct"] = safe_divide(monthly_overall["Energy_thermal_kWh"], monthly_overall["Energy_kWh"]) * 100
-                        
-                        col_m1, col_m2 = st.columns(2)
-                        
-                        with col_m1:
-                            fig_kwh_m3 = px.line(
-                                monthly_overall,
-                                x="Month",
-                                y="kWh_per_m3",
-                                markers=True,
-                                title="Overall Energy Efficiency Trend (kWh/m³)",
-                                labels={"kWh_per_m3": "kWh/m³", "Month": "Month"}
-                            )
-                            fig_kwh_m3.update_traces(line_color='#667eea', line_width=3)
-                            fig_kwh_m3.update_layout(height=400, plot_bgcolor="white", showlegend=False)
-                            st.plotly_chart(fig_kwh_m3, use_container_width=True)
+                    with col_o2:
+                        fig_overall_specific = px.line(
+                            monthly_overall,
+                            x="Month",
+                            y="kWh_per_kg",
+                            markers=True,
+                            title="Overall Specific Energy (kWh/kg water)",
+                            labels={"kWh_per_kg": "kWh/kg", "Month": "Month"}
+                        )
+                        fig_overall_specific.update_traces(line_color='#f093fb', line_width=3, marker=dict(size=10))
+                        fig_overall_specific.update_layout(height=350, plot_bgcolor="white", showlegend=False)
+                        st.plotly_chart(fig_overall_specific, use_container_width=True)
                     
-                        with col_m2:
-                            fig_kwh_kg = px.line(
-                                monthly_overall,
-                                x="Month",
-                                y="kWh_per_kg",
-                                markers=True,
-                                title="Overall Specific Energy Trend (kWh/kg water)",
-                                labels={"kWh_per_kg": "kWh/kg", "Month": "Month"}
-                            )
-                            fig_kwh_kg.update_traces(line_color='#f093fb', line_width=3)
-                            fig_kwh_kg.update_layout(height=400, plot_bgcolor="white", showlegend=False)
-                            st.plotly_chart(fig_kwh_kg, use_container_width=True)
+                    col_o3, col_o4 = st.columns(2)
+                    
+                    with col_o3:
+                        # Monthly energy consumption (stacked)
+                        fig_monthly_energy = go.Figure()
+                        fig_monthly_energy.add_trace(go.Bar(
+                            name='Thermal',
+                            x=monthly_overall["Month"],
+                            y=monthly_overall["Energy_thermal_kWh"],
+                            marker_color='#FF6B6B',
+                            text=[f"{v:,.0f}" for v in monthly_overall["Energy_thermal_kWh"]],
+                            textposition='inside'
+                        ))
+                        fig_monthly_energy.add_trace(go.Bar(
+                            name='Electrical',
+                            x=monthly_overall["Month"],
+                            y=monthly_overall["Energy_electrical_kWh"],
+                            marker_color='#4ECDC4',
+                            text=[f"{v:,.0f}" for v in monthly_overall["Energy_electrical_kWh"]],
+                            textposition='inside'
+                        ))
+                        fig_monthly_energy.update_layout(
+                            title="Monthly Energy Consumption (kWh)",
+                            xaxis_title="Month",
+                            yaxis_title="Energy (kWh)",
+                            barmode='stack',
+                            height=350,
+                            plot_bgcolor="white"
+                        )
+                        st.plotly_chart(fig_monthly_energy, use_container_width=True)
+                    
+                    with col_o4:
+                        # Monthly production volume
+                        fig_monthly_volume = px.bar(
+                            monthly_overall,
+                            x="Month",
+                            y="Volume_m3",
+                            title="Monthly Production Volume (m³)",
+                            labels={"Volume_m3": "Volume (m³)", "Month": "Month"},
+                            text_auto='.0f'
+                        )
+                        fig_monthly_volume.update_traces(marker_color='#26de81', textposition='outside')
+                        fig_monthly_volume.update_layout(height=350, plot_bgcolor="white", showlegend=False)
+                        st.plotly_chart(fig_monthly_volume, use_container_width=True)
+                    
+                    # ========== SECTION 2: WEEKLY ENERGY CONSUMPTION ==========
+                    if weekly_energy is not None and not weekly_energy.empty:
+                        st.subheader("📅 Weekly Energy Consumption")
                         
-                        # Additional overall charts
-                        col_m3, col_m4 = st.columns(2)
+                        col_w1, col_w2 = st.columns(2)
                         
-                        with col_m3:
-                            # Stacked area chart for energy consumption
-                            fig_energy_area = go.Figure()
-                            fig_energy_area.add_trace(go.Scatter(
-                                x=monthly_overall["Month"],
-                                y=monthly_overall["Energy_thermal_kWh"],
-                                mode='lines',
+                        with col_w1:
+                            # Weekly total energy consumption
+                            fig_weekly_total = go.Figure()
+                            fig_weekly_total.add_trace(go.Bar(
                                 name='Thermal',
-                                fill='tonexty',
-                                line=dict(color='#FF6B6B', width=2)
+                                x=weekly_energy["Week_Label"],
+                                y=weekly_energy["E_thermal_total_kWh"],
+                                marker_color='#FF6B6B'
                             ))
-                            fig_energy_area.add_trace(go.Scatter(
-                                x=monthly_overall["Month"],
-                                y=monthly_overall["Energy_electrical_kWh"],
-                                mode='lines',
+                            fig_weekly_total.add_trace(go.Bar(
                                 name='Electrical',
-                                fill='tozeroy',
-                                line=dict(color='#4ECDC4', width=2)
+                                x=weekly_energy["Week_Label"],
+                                y=weekly_energy["E_el_kWh"],
+                                marker_color='#4ECDC4'
                             ))
-                            fig_energy_area.update_layout(
-                                title="Monthly Energy Consumption Trend (kWh)",
-                                xaxis_title="Month",
+                            fig_weekly_total.update_layout(
+                                title="Weekly Energy Consumption (kWh)",
+                                xaxis_title="Week",
                                 yaxis_title="Energy (kWh)",
-                                height=400,
-                                plot_bgcolor="white"
+                                barmode='stack',
+                                height=350,
+                                plot_bgcolor="white",
+                                xaxis_tickangle=-45
                             )
-                            st.plotly_chart(fig_energy_area, use_container_width=True)
+                            st.plotly_chart(fig_weekly_total, use_container_width=True)
                         
-                        with col_m4:
-                            # Production volume trend
-                            fig_volume = px.line(
-                                monthly_overall,
-                                x="Month",
-                                y="Volume_m3",
+                        with col_w2:
+                            # Weekly trend line
+                            fig_weekly_trend = px.line(
+                                weekly_energy,
+                                x="Week_Label",
+                                y="Total_kWh",
                                 markers=True,
-                                title="Monthly Production Volume (m³)",
-                                labels={"Volume_m3": "Volume (m³)", "Month": "Month"}
+                                title="Weekly Total Energy Trend (kWh)",
+                                labels={"Total_kWh": "Total Energy (kWh)", "Week_Label": "Week"}
                             )
-                            fig_volume.update_traces(line_color='#26de81', line_width=3)
-                            fig_volume.update_layout(height=400, plot_bgcolor="white", showlegend=False)
-                            st.plotly_chart(fig_volume, use_container_width=True)
+                            fig_weekly_trend.update_traces(line_color='#667eea', line_width=3, marker=dict(size=8))
+                            fig_weekly_trend.update_layout(
+                                height=350,
+                                plot_bgcolor="white",
+                                showlegend=False,
+                                xaxis_tickangle=-45
+                            )
+                            st.plotly_chart(fig_weekly_trend, use_container_width=True)
                         
-                        # Monthly summary table
-                        st.subheader("Monthly Summary Table")
-                        monthly_display = monthly_overall.copy()
-                        monthly_display = monthly_display.rename(columns={
-                            "Month": "Month",
-                            "Energy_thermal_kWh": "Thermal (kWh)",
-                            "Energy_electrical_kWh": "Electrical (kWh)",
-                            "Energy_kWh": "Total (kWh)",
-                            "Thermal_pct": "Thermal %",
-                            "Volume_m3": "Volume (m³)",
-                            "Water_kg": "Water (kg)",
-                            "kWh_per_m3": "kWh/m³",
-                            "kWh_per_kg": "kWh/kg",
-                            "kWh_thermal_per_m3": "Thermal kWh/m³"
-                        })
+                        # Weekly statistics
+                        avg_weekly = weekly_energy["Total_kWh"].mean()
+                        max_weekly = weekly_energy["Total_kWh"].max()
+                        min_weekly = weekly_energy["Total_kWh"].min()
+                        max_week = weekly_energy.loc[weekly_energy["Total_kWh"].idxmax(), "Week_Label"]
                         
-                        st.dataframe(monthly_display, use_container_width=True, hide_index=True)
-
+                        st.info(
+                            f"📊 **Weekly Statistics:** Average = **{avg_weekly:,.0f} kWh/week** | "
+                            f"Peak week: **{max_week}** ({max_weekly:,.0f} kWh) | "
+                            f"Range: {min_weekly:,.0f} - {max_weekly:,.0f} kWh"
+                        )
+                    
+                    # ========== SECTION 3: BY PRODUCT TRENDS ==========
+                    st.subheader("🧱 Trends by Product")
+                    
+                    col_p1, col_p2 = st.columns(2)
+                    
+                    with col_p1:
+                        fig_prod_efficiency = px.line(
+                            monthly_product,
+                            x="Month",
+                            y="kWh_per_m3",
+                            color="Produkt",
+                            markers=True,
+                            title="Energy Efficiency by Product (kWh/m³)",
+                            labels={"kWh_per_m3": "kWh/m³", "Month": "Month"}
+                        )
+                        fig_prod_efficiency.update_layout(height=350, plot_bgcolor="white")
+                        st.plotly_chart(fig_prod_efficiency, use_container_width=True)
+                    
+                    with col_p2:
+                        fig_prod_specific = px.line(
+                            monthly_product,
+                            x="Month",
+                            y="kWh_per_kg",
+                            color="Produkt",
+                            markers=True,
+                            title="Specific Energy by Product (kWh/kg water)",
+                            labels={"kWh_per_kg": "kWh/kg", "Month": "Month"}
+                        )
+                        fig_prod_specific.update_layout(height=350, plot_bgcolor="white")
+                        st.plotly_chart(fig_prod_specific, use_container_width=True)
+                    
+                    col_p3, col_p4 = st.columns(2)
+                    
+                    with col_p3:
+                        fig_prod_thermal = px.line(
+                            monthly_product,
+                            x="Month",
+                            y="kWh_thermal_per_m3",
+                            color="Produkt",
+                            markers=True,
+                            title="Thermal Efficiency by Product (kWh/m³)",
+                            labels={"kWh_thermal_per_m3": "Thermal kWh/m³", "Month": "Month"}
+                        )
+                        fig_prod_thermal.update_layout(height=350, plot_bgcolor="white")
+                        st.plotly_chart(fig_prod_thermal, use_container_width=True)
+                    
+                    with col_p4:
+                        fig_prod_volume = px.line(
+                            monthly_product,
+                            x="Month",
+                            y="Volume_m3",
+                            color="Produkt",
+                            markers=True,
+                            title="Production Volume by Product (m³)",
+                            labels={"Volume_m3": "Volume (m³)", "Month": "Month"}
+                        )
+                        fig_prod_volume.update_layout(height=350, plot_bgcolor="white")
+                        st.plotly_chart(fig_prod_volume, use_container_width=True)
+                    
+                    # ========== SECTION 4: BY ZONE TRENDS ==========
+                    st.subheader("🏭 Trends by Zone")
+                    
+                    col_z1, col_z2 = st.columns(2)
+                    
+                    with col_z1:
+                        fig_zone_efficiency = px.line(
+                            monthly_zone,
+                            x="Month",
+                            y="kWh_per_m3",
+                            color="Zone",
+                            markers=True,
+                            title="Energy Efficiency by Zone (kWh/m³)",
+                            labels={"kWh_per_m3": "kWh/m³", "Month": "Month"}
+                        )
+                        fig_zone_efficiency.update_layout(height=350, plot_bgcolor="white")
+                        st.plotly_chart(fig_zone_efficiency, use_container_width=True)
+                    
+                    with col_z2:
+                        fig_zone_specific = px.line(
+                            monthly_zone,
+                            x="Month",
+                            y="kWh_per_kg",
+                            color="Zone",
+                            markers=True,
+                            title="Specific Energy by Zone (kWh/kg water)",
+                            labels={"kWh_per_kg": "kWh/kg", "Month": "Month"}
+                        )
+                        fig_zone_specific.update_layout(height=350, plot_bgcolor="white")
+                        st.plotly_chart(fig_zone_specific, use_container_width=True)
+                    
+                    col_z3, col_z4 = st.columns(2)
+                    
+                    with col_z3:
+                        fig_zone_thermal = px.line(
+                            monthly_zone,
+                            x="Month",
+                            y="Energy_thermal_kWh",
+                            color="Zone",
+                            markers=True,
+                            title="Thermal Energy by Zone (kWh)",
+                            labels={"Energy_thermal_kWh": "Thermal Energy (kWh)", "Month": "Month"}
+                        )
+                        fig_zone_thermal.update_layout(height=350, plot_bgcolor="white")
+                        st.plotly_chart(fig_zone_thermal, use_container_width=True)
+                    
+                    with col_z4:
+                        fig_zone_volume = px.line(
+                            monthly_zone,
+                            x="Month",
+                            y="Volume_m3",
+                            color="Zone",
+                            markers=True,
+                            title="Production Volume by Zone (m³)",
+                            labels={"Volume_m3": "Volume (m³)", "Month": "Month"}
+                        )
+                        fig_zone_volume.update_layout(height=350, plot_bgcolor="white")
+                        st.plotly_chart(fig_zone_volume, use_container_width=True)
             # ===== 6. DATA TABLES =====
             with st.expander("📋 View Detailed Data Tables"):
                 tab1, tab2, tab3 = st.tabs(["Monthly Summary", "Yearly Summary", "Product Totals"])
@@ -1038,6 +1085,7 @@ if st.session_state.analysis_complete and st.session_state.results:
         st.error(f"❌ Display error: {e}")
         with st.expander("Details"):
             st.exception(e)
+
 
 
 
