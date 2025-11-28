@@ -6,10 +6,6 @@ import plotly.express as px
 import plotly.graph_objects as go
 from io import BytesIO
 import os
-import time
-import json
-from datetime import datetime, timedelta
-import traceback
 
 # ---------------------------------------------------------
 # Import KPI engine functions from backend module
@@ -29,13 +25,6 @@ try:
         PRODUCT_SPECIFICATIONS,
         SUSPENSION_KG,
         CONFIG,
-        validate_energy_data,
-        validate_wagon_data,
-        validate_product_volumes,
-        calculate_water_for_volume,
-        calculate_water_for_plates,
-        calculate_water_per_plate,
-        calculate_water_per_m3,
     )
 except ImportError as e:
     st.error(f"❌ Unable to import dryer_kpi_monthly_final module: {e}")
@@ -60,7 +49,6 @@ st.markdown(
         font-weight: 700;
         text-align: center;
         margin-bottom: 20px;
-        text-shadow: 1px 1px 2px rgba(0,0,0,0.1);
     }
     .section-header {
         color: #003366;
@@ -79,62 +67,8 @@ st.markdown(
         box-shadow: 0 4px 15px rgba(0,0,0,0.2);
         color: white;
     }
-    .metric-card h3 {
-        margin: 0;
-        font-size: 16px;
-        opacity: 0.9;
-    }
-    .metric-card h2 {
-        margin: 10px 0 0 0;
-        font-size: 32px;
-        font-weight: 700;
-    }
-    .tooltip {
-        position: relative;
-        display: inline-block;
-        cursor: help;
-    }
-    .tooltip .tooltiptext {
-        visibility: hidden;
-        width: 300px;
-        background-color: #555;
-        color: #fff;
-        text-align: center;
-        border-radius: 6px;
-        padding: 10px;
-        position: absolute;
-        z-index: 1;
-        bottom: 125%;
-        left: 50%;
-        margin-left: -150px;
-        opacity: 0;
-        transition: opacity 0.3s;
-    }
-    .tooltip:hover .tooltiptext {
-        visibility: visible;
-        opacity: 1;
-    }
-    .error-container {
-        background-color: #fff2f2;
-        border: 1px solid #ffcccc;
-        border-radius: 5px;
-        padding: 15px;
-        margin-bottom: 20px;
-    }
-    .warning-container {
-        background-color: #fffbe6;
-        border: 1px solid #ffe58f;
-        border-radius: 5px;
-        padding: 15px;
-        margin-bottom: 20px;
-    }
-    .info-container {
-        background-color: #e6f7ff;
-        border: 1px solid #91d5ff;
-        border-radius: 5px;
-        padding: 15px;
-        margin-bottom: 20px;
-    }
+    .metric-card h3 { margin: 0; font-size: 16px; opacity: 0.9; }
+    .metric-card h2 { margin: 10px 0 0 0; font-size: 32px; font-weight: 700; }
     </style>
     """,
     unsafe_allow_html=True,
@@ -149,9 +83,9 @@ st.markdown(
 )
 
 st.info(
-    f"📊 **Individual Product Formulas Active** (Table 1) | "
+    f"📊 **Using MEASURED Values from Table 1** | "
     f"Suspension: {SUSPENSION_KG} kg | "
-    f"Each product has its own unique water evaporation formula"
+    f"Each product has measured water evaporation values"
 )
 
 # ---------------------------------------------------------
@@ -163,12 +97,10 @@ with st.sidebar:
     energy_file = st.file_uploader(
         "📊 Energy File (.xlsx)",
         type=["xlsx"],
-        help="Upload the hourly energy consumption Excel file",
     )
     wagon_file = st.file_uploader(
         "🚛 Hordenwagen File (.xlsm, .xlsx)",
         type=["xlsm", "xlsx"],
-        help="Upload the wagon tracking Excel file",
     )
 
     st.markdown("---")
@@ -178,7 +110,6 @@ with st.sidebar:
         "🧱 Product(s):",
         ["L28", "L30", "L34", "L36", "L38", "L42", "L44", "N40", "N44", "Y44"],
         default=["L36", "L38", "N40"],
-        help="Select products to include in the analysis",
     )
 
     month = st.number_input(
@@ -186,64 +117,30 @@ with st.sidebar:
         min_value=0,
         max_value=12,
         value=0,
-        help="Filter by month (1–12) or 0 for all months",
     )
 
     st.markdown("---")
     run_button = st.button("▶️ Run Analysis")
-    
-    st.markdown("---")
-    st.subheader("🔧 Advanced Options")
-    
-    use_optimized_processing = st.checkbox(
-        "Use optimized processing (recommended for large datasets)",
-        value=True,
-        help="Enable optimized algorithms for better performance with large datasets"
-    )
-    
-    enable_debug_mode = st.checkbox(
-        "Enable debug mode",
-        value=False,
-        help="Show detailed logs and error messages for troubleshooting"
-    )
+
 
 # ---------------------------------------------------------
 # Helper functions
 # ---------------------------------------------------------
-def create_kpi_card(title: str, value, unit: str, tooltip: str = None) -> str:
-    """Return HTML for a KPI card with optional tooltip."""
+def create_kpi_card(title: str, value, unit: str) -> str:
     if value is None:
-        text = "–"
-        unit_str = ""
+        text, unit_str = "–", ""
     else:
         try:
             if np.isnan(value):
-                text = "–"
-                unit_str = ""
+                text, unit_str = "–", ""
             else:
-                text = f"{value:,.2f}"
-                unit_str = f" {unit}"
+                text, unit_str = f"{value:,.2f}", f" {unit}"
         except (TypeError, ValueError):
-            text = str(value)
-            unit_str = f" {unit}"
-    
-    tooltip_html = ""
-    if tooltip:
-        tooltip_html = f"""
-        <div class="tooltip">
-            <span class="tooltiptext">{tooltip}</span>
-        </div>
-        """
-    
-    return f"""
-    <div class="metric-card">
-        <h3>{title} {tooltip_html}</h3>
-        <h2>{text}{unit_str}</h2>
-    </div>
-    """
+            text, unit_str = str(value), f" {unit}"
+    return f'<div class="metric-card"><h3>{title}</h3><h2>{text}{unit_str}</h2></div>'
+
 
 def create_excel_download(results: dict) -> BytesIO:
-    """Create an Excel file in memory with all result tables."""
     output = BytesIO()
     with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
         for key, df in results.items():
@@ -253,123 +150,55 @@ def create_excel_download(results: dict) -> BytesIO:
     output.seek(0)
     return output
 
-def validate_uploaded_files(energy_file, wagon_file):
-    """Validate uploaded files before processing."""
-    errors = []
-    
-    if not energy_file:
-        errors.append("Energy file is required")
-    elif not energy_file.name.endswith('.xlsx'):
-        errors.append("Energy file must be in .xlsx format")
-    
-    if not wagon_file:
-        errors.append("Wagon file is required")
-    elif not (wagon_file.name.endswith('.xlsx') or wagon_file.name.endswith('.xlsm')):
-        errors.append("Wagon file must be in .xlsx or .xlsm format")
-    
-    return len(errors) == 0, errors
 
-def run_analysis(energy_path: str, wagon_path: str, products_filter, month_filter, optimized: bool = True) -> dict:
-    """Orchestrate the full KPI calculation with improved error handling."""
+def run_analysis(energy_path: str, wagon_path: str, products_filter, month_filter) -> dict:
     progress = st.progress(0)
     status = st.empty()
-    
-    # Create containers for error messages
-    error_container = st.empty()
-    warning_container = st.empty()
-    info_container = st.empty()
 
     try:
-        # 1) Energy
         status.text("🔄 Parsing energy data...")
         progress.progress(15)
-        
-        try:
-            e_raw = pd.read_excel(energy_path, sheet_name=CONFIG["energy_sheet"])
-            e = parse_energy(e_raw)
-            if e.empty:
-                raise ValueError("Parsed energy data is empty.")
-        except Exception as e:
-            error_msg = f"Error parsing energy data: {str(e)}"
-            if enable_debug_mode:
-                error_msg += f"\n\nTraceback:\n{traceback.format_exc()}"
-            error_container.error(error_msg)
-            raise ValueError(error_msg)
+        e_raw = pd.read_excel(energy_path, sheet_name=CONFIG["energy_sheet"])
+        e = parse_energy(e_raw)
+        if e.empty:
+            raise ValueError("Parsed energy data is empty.")
 
-        # 2) Wagons
         status.text("🔄 Parsing wagon tracking data...")
         progress.progress(35)
-        
-        try:
-            w_raw = pd.read_excel(
-                wagon_path,
-                sheet_name=CONFIG["wagon_sheet"],
-                header=CONFIG["wagon_header_row"],
-            )
-            w = parse_wagon(w_raw)
-            if w.empty:
-                raise ValueError("Parsed wagon data is empty.")
-        except Exception as e:
-            error_msg = f"Error parsing wagon data: {str(e)}"
-            if enable_debug_mode:
-                error_msg += f"\n\nTraceback:\n{traceback.format_exc()}"
-            error_container.error(error_msg)
-            raise ValueError(error_msg)
+        w_raw = pd.read_excel(
+            wagon_path,
+            sheet_name=CONFIG["wagon_sheet"],
+            header=CONFIG["wagon_header_row"],
+        )
+        w = parse_wagon(w_raw)
+        if w.empty:
+            raise ValueError("Parsed wagon data is empty.")
 
-        # 3) Filters
         status.text("🔄 Applying filters...")
         progress.progress(50)
-        
         if products_filter:
-            filtered_w = w[w["Produkt"].astype(str).isin(products_filter)]
-            if filtered_w.empty:
-                warning_msg = f"No wagon records found for selected products: {products_filter}. Using all products instead."
-                warning_container.warning(warning_msg)
-            else:
-                w = filtered_w
+            w = w[w["Produkt"].astype(str).isin(products_filter)]
+            if w.empty:
+                raise ValueError(f"No wagon records found for selected products: {products_filter}")
 
         if month_filter:
-            filtered_e = e[e["Month"] == month_filter]
-            filtered_w = w[w["Month"] == month_filter]
-            
-            if filtered_e.empty or filtered_w.empty:
-                warning_msg = f"No energy/wagon data found for month = {month_filter}. Using all months instead."
-                warning_container.warning(warning_msg)
-            else:
-                e = filtered_e
-                w = filtered_w
+            e = e[e["Month"] == month_filter]
+            w = w[w["Month"] == month_filter]
+            if e.empty or w.empty:
+                raise ValueError(f"No data found for month = {month_filter}.")
 
-        # 4) Intervals
         status.text("🔄 Building zone intervals...")
         progress.progress(65)
-        
-        try:
-            ivals = explode_intervals(w)
-            if ivals.empty:
-                raise ValueError("Zone intervals could not be created (empty result).")
-        except Exception as e:
-            error_msg = f"Error creating zone intervals: {str(e)}"
-            if enable_debug_mode:
-                error_msg += f"\n\nTraceback:\n{traceback.format_exc()}"
-            error_container.error(error_msg)
-            raise ValueError(error_msg)
+        ivals = explode_intervals(w)
+        if ivals.empty:
+            raise ValueError("Zone intervals could not be created.")
 
-        # 5) Allocation
         status.text("🔄 Allocating energy to products...")
         progress.progress(80)
-        
-        try:
-            alloc = allocate_energy(e, ivals)
-            if alloc.empty:
-                raise ValueError("Energy allocation result is empty.")
-        except Exception as e:
-            error_msg = f"Error allocating energy: {str(e)}"
-            if enable_debug_mode:
-                error_msg += f"\n\nTraceback:\n{traceback.format_exc()}"
-            error_container.error(error_msg)
-            raise ValueError(error_msg)
+        alloc = allocate_energy(e, ivals)
+        if alloc.empty:
+            raise ValueError("Energy allocation result is empty.")
 
-        # 6) Summaries
         status.text("🔄 Aggregating KPIs...")
         progress.progress(90)
 
@@ -380,23 +209,11 @@ def run_analysis(energy_path: str, wagon_path: str, products_filter, month_filte
             Volume_m3=("m3", "sum"),
         )
         
-        # Safe division
-        summary["kWh_thermal_per_m3"] = np.where(
-            summary["Volume_m3"] > 0,
-            summary["Energy_thermal_kWh"] / summary["Volume_m3"],
-            0
-        )
-        summary["kWh_per_m3"] = np.where(
-            summary["Volume_m3"] > 0,
-            summary["Energy_kWh"] / summary["Volume_m3"],
-            0
-        )
-
-        # Add water KPIs using standardized method
+        summary["kWh_thermal_per_m3"] = np.where(summary["Volume_m3"] > 0, summary["Energy_thermal_kWh"] / summary["Volume_m3"], 0)
+        summary["kWh_per_m3"] = np.where(summary["Volume_m3"] > 0, summary["Energy_kWh"] / summary["Volume_m3"], 0)
         summary = add_water_kpis(summary)
         summary = summary.fillna(0)
 
-        # Yearly by zone
         yearly = summary.groupby(["Produkt", "Zone"], as_index=False).agg(
             Energy_thermal_kWh=("Energy_thermal_kWh", "sum"),
             Energy_electrical_kWh=("Energy_electrical_kWh", "sum"),
@@ -411,7 +228,6 @@ def run_analysis(energy_path: str, wagon_path: str, products_filter, month_filte
         yearly["kWh_per_kg"] = np.where(yearly["Water_kg"] > 0, yearly["Energy_kWh"] / yearly["Water_kg"], 0)
         yearly = yearly.fillna(0)
         
-        # Product totals
         product_totals = summary.groupby(["Month", "Produkt"], as_index=False).agg(
             Energy_thermal_kWh=("Energy_thermal_kWh", "sum"),
             Energy_electrical_kWh=("Energy_electrical_kWh", "sum"),
@@ -428,17 +244,6 @@ def run_analysis(energy_path: str, wagon_path: str, products_filter, month_filte
 
         progress.progress(100)
         status.text("✅ Analysis complete!")
-        
-        # Show info message with data quality metrics
-        info_msg = f"""
-        **Data Quality Metrics:**
-        - Energy records: {len(e)}
-        - Wagon records: {len(w)}
-        - Zone intervals: {len(ivals)}
-        - Allocated records: {len(alloc)}
-        - Date range: {e['Zeitstempel'].min()} to {e['Zeitstempel'].max()}
-        """
-        info_container.info(info_msg)
 
         return {
             "energy": e,
@@ -450,20 +255,12 @@ def run_analysis(energy_path: str, wagon_path: str, products_filter, month_filte
             "product_totals": product_totals,
         }
 
-    except Exception as err:
-        error_msg = f"❌ Error during analysis: {err}"
-        if enable_debug_mode:
-            error_msg += f"\n\nTraceback:\n{traceback.format_exc()}"
-        error_container.error(error_msg)
-        raise err
-
     finally:
+        import time
         time.sleep(0.4)
         progress.empty()
         status.empty()
-        error_container.empty()
-        warning_container.empty()
-        info_container.empty()
+
 
 # ---------------------------------------------------------
 # Session state
@@ -472,13 +269,12 @@ if "results" not in st.session_state:
     st.session_state.results = None
 if "analysis_complete" not in st.session_state:
     st.session_state.analysis_complete = False
-if "last_files" not in st.session_state:
-    st.session_state.last_files = None
 
-# Check if files have changed
 if energy_file and wagon_file:
     current_files = (energy_file.name, wagon_file.name)
-    if st.session_state.last_files != current_files:
+    if "last_files" not in st.session_state:
+        st.session_state.last_files = current_files
+    elif st.session_state.last_files != current_files:
         st.session_state.results = None
         st.session_state.analysis_complete = False
         st.session_state.last_files = current_files
@@ -487,14 +283,10 @@ if energy_file and wagon_file:
 # Run Button
 # ---------------------------------------------------------
 if run_button:
-    # Validate uploaded files
-    is_valid, errors = validate_uploaded_files(energy_file, wagon_file)
-    if not is_valid:
-        st.error("⚠️ File validation failed:\n" + "\n".join(errors))
+    if not energy_file or not wagon_file:
+        st.error("⚠️ Please upload both Energy and Hordenwagen files.")
     else:
-        tmp_e = None
-        tmp_w = None
-
+        tmp_e = tmp_w = None
         try:
             with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as f_e:
                 f_e.write(energy_file.read())
@@ -504,18 +296,14 @@ if run_button:
                 f_w.write(wagon_file.read())
                 tmp_w = f_w.name
 
-            results = run_analysis(
-                tmp_e,
-                tmp_w,
-                products if products else None,
-                month if month != 0 else None,
-                use_optimized_processing
-            )
+            results = run_analysis(tmp_e, tmp_w, products if products else None, month if month != 0 else None)
             st.session_state.results = results
             st.session_state.analysis_complete = True
 
         except Exception as err:
             st.error(f"❌ Error during analysis: {err}")
+            with st.expander("🔍 View Error Details"):
+                st.exception(err)
             st.session_state.results = None
             st.session_state.analysis_complete = False
 
@@ -548,141 +336,61 @@ if st.session_state.analysis_complete and st.session_state.results:
             total_energy = float(yearly["Energy_kWh"].sum())
             total_volume = float(yearly["Volume_m3"].sum())
             total_water = float(yearly["Water_kg"].sum())
-
             avg_kwh_thermal_kg = float(yearly["kWh_thermal_per_kg"].mean()) if len(yearly) > 0 else 0
             avg_kwh_kg = float(yearly["kWh_per_kg"].mean()) if len(yearly) > 0 else 0
 
             c1, c2, c3, c4, c5 = st.columns(5)
             with c1:
-                st.markdown(create_kpi_card(
-                    "Thermal Energy", 
-                    total_thermal, 
-                    "kWh",
-                    "Total thermal energy consumed from gas"
-                ), unsafe_allow_html=True)
+                st.markdown(create_kpi_card("Thermal Energy", total_thermal, "kWh"), unsafe_allow_html=True)
             with c2:
-                st.markdown(create_kpi_card(
-                    "Total Energy", 
-                    total_energy, 
-                    "kWh",
-                    "Total energy consumed (thermal + electrical)"
-                ), unsafe_allow_html=True)
+                st.markdown(create_kpi_card("Total Energy", total_energy, "kWh"), unsafe_allow_html=True)
             with c3:
-                st.markdown(create_kpi_card(
-                    "Total Volume", 
-                    total_volume, 
-                    "m³",
-                    "Total volume of product processed"
-                ), unsafe_allow_html=True)
+                st.markdown(create_kpi_card("Total Volume", total_volume, "m³"), unsafe_allow_html=True)
             with c4:
-                st.markdown(create_kpi_card(
-                    "Thermal kWh/kg", 
-                    avg_kwh_thermal_kg, 
-                    "kWh/kg",
-                    "Average thermal energy per kg of water evaporated"
-                ), unsafe_allow_html=True)
+                st.markdown(create_kpi_card("Thermal kWh/kg", avg_kwh_thermal_kg, "kWh/kg"), unsafe_allow_html=True)
             with c5:
-                st.markdown(create_kpi_card(
-                    "Total kWh/kg", 
-                    avg_kwh_kg, 
-                    "kWh/kg",
-                    "Average total energy per kg of water evaporated"
-                ), unsafe_allow_html=True)
+                st.markdown(create_kpi_card("Total kWh/kg", avg_kwh_kg, "kWh/kg"), unsafe_allow_html=True)
             
             electrical_pct = (total_electrical / total_energy * 100) if total_energy > 0 else 0
             st.info(f"⚡ Electrical energy represents **{electrical_pct:.1f}%** of total energy consumption")
 
             # ===== PRODUCT TOTALS =====
             if product_totals is not None and not product_totals.empty:
-                st.markdown('<div class="section-header">📊 Product Performance (All Zones Combined)</div>', unsafe_allow_html=True)
+                st.markdown('<div class="section-header">📊 Product Performance</div>', unsafe_allow_html=True)
                 
                 prod_agg = product_totals.groupby("Produkt", as_index=False).agg({
-                    "Energy_thermal_kWh": "sum",
-                    "Energy_electrical_kWh": "sum",
-                    "Energy_kWh": "sum",
-                    "Volume_m3": "sum",
-                    "Water_kg": "sum",
+                    "Energy_thermal_kWh": "sum", "Energy_electrical_kWh": "sum",
+                    "Energy_kWh": "sum", "Volume_m3": "sum", "Water_kg": "sum",
                 })
                 
                 prod_agg["kWh_thermal_per_m3"] = np.where(prod_agg["Volume_m3"] > 0, prod_agg["Energy_thermal_kWh"] / prod_agg["Volume_m3"], 0)
                 prod_agg["kWh_per_m3"] = np.where(prod_agg["Volume_m3"] > 0, prod_agg["Energy_kWh"] / prod_agg["Volume_m3"], 0)
                 prod_agg["kWh_thermal_per_kg"] = np.where(prod_agg["Water_kg"] > 0, prod_agg["Energy_thermal_kWh"] / prod_agg["Water_kg"], 0)
                 prod_agg["kWh_per_kg"] = np.where(prod_agg["Water_kg"] > 0, prod_agg["Energy_kWh"] / prod_agg["Water_kg"], 0)
-                prod_agg["Electrical_pct"] = np.where(prod_agg["Energy_kWh"] > 0, (prod_agg["Energy_electrical_kWh"] / prod_agg["Energy_kWh"]) * 100, 0)
                 prod_agg = prod_agg.fillna(0)
                 
                 col_p1, col_p2 = st.columns(2)
                 
                 with col_p1:
                     fig_thermal = go.Figure()
-                    fig_thermal.add_trace(go.Bar(
-                        name='Thermal (Gas)',
-                        x=prod_agg['Produkt'],
-                        y=prod_agg['Energy_thermal_kWh'],
-                        marker_color='#FF6B6B'
-                    ))
-                    fig_thermal.add_trace(go.Bar(
-                        name='Electrical',
-                        x=prod_agg['Produkt'],
-                        y=prod_agg['Energy_electrical_kWh'],
-                        marker_color='#4ECDC4'
-                    ))
-                    fig_thermal.update_layout(
-                        title="Total Energy by Product (Thermal + Electrical)",
-                        yaxis_title="Energy (kWh)",
-                        barmode='stack',
-                        height=400,
-                        plot_bgcolor="white"
-                    )
+                    fig_thermal.add_trace(go.Bar(name='Thermal (Gas)', x=prod_agg['Produkt'], y=prod_agg['Energy_thermal_kWh'], marker_color='#FF6B6B'))
+                    fig_thermal.add_trace(go.Bar(name='Electrical', x=prod_agg['Produkt'], y=prod_agg['Energy_electrical_kWh'], marker_color='#4ECDC4'))
+                    fig_thermal.update_layout(title="Total Energy by Product", yaxis_title="Energy (kWh)", barmode='stack', height=400, plot_bgcolor="white")
                     st.plotly_chart(fig_thermal, use_container_width=True)
                 
                 with col_p2:
-                    fig_prod_thermal = px.bar(
-                        prod_agg,
-                        x="Produkt",
-                        y="kWh_thermal_per_kg",
-                        color="kWh_thermal_per_kg",
-                        color_continuous_scale="Reds",
-                        title="Thermal Specific Energy by Product (kWh thermal/kg water)",
-                        text_auto=".2f"
-                    )
-                    fig_prod_thermal.update_layout(height=400, plot_bgcolor="white")
-                    st.plotly_chart(fig_prod_thermal, use_container_width=True)
+                    fig_prod = px.bar(prod_agg, x="Produkt", y="kWh_thermal_per_kg", color="kWh_thermal_per_kg", color_continuous_scale="Reds", title="Thermal Specific Energy (kWh/kg water)", text_auto=".2f")
+                    fig_prod.update_layout(height=400, plot_bgcolor="white")
+                    st.plotly_chart(fig_prod, use_container_width=True)
                 
                 st.subheader("Product Energy Breakdown")
                 st.dataframe(prod_agg, use_container_width=True)
 
-            # ===== PRODUCT SPECIFICATIONS =====
-            st.markdown('<div class="section-header">📐 Product Specifications & Water-Loss Formulas (Table 1)</div>', unsafe_allow_html=True)
+            # ===== PRODUCT SPECIFICATIONS (MEASURED VALUES) =====
+            st.markdown('<div class="section-header">📐 Product Specifications (MEASURED Values from Table 1)</div>', unsafe_allow_html=True)
             
-            st.write(
-                f"Each product has an **individual formula** based on {SUSPENSION_KG}kg suspension: "
-                "**Water/mm = (Slope × {SUSPENSION_KG}) + Intercept**, then **Total Water = Water/mm × Thickness / 1000**"
-            )
-            
-            # Show sample formulas
-            col_f1, col_f2, col_f3 = st.columns(3)
-            
-            with col_f1:
-                st.metric(
-                    "L36 Formula",
-                    f"{PRODUCT_SPECIFICATIONS['L36']['water_per_mm_g']:.2f} g/mm",
-                    help=f"{PRODUCT_SPECIFICATIONS['L36']['formula']} where x={SUSPENSION_KG}kg"
-                )
-            
-            with col_f2:
-                st.metric(
-                    "N40 Formula",
-                    f"{PRODUCT_SPECIFICATIONS['N40']['water_per_mm_g']:.2f} g/mm",
-                    help=f"{PRODUCT_SPECIFICATIONS['N40']['formula']} where x={SUSPENSION_KG}kg"
-                )
-            
-            with col_f3:
-                st.metric(
-                    "Y44 Formula",
-                    f"{PRODUCT_SPECIFICATIONS['Y44']['water_per_mm_g']:.2f} g/mm",
-                    help=f"{PRODUCT_SPECIFICATIONS['Y44']['formula']} where x={SUSPENSION_KG}kg"
-                )
+            st.write(f"**Formula:** water_per_mm (g) = Slope × {SUSPENSION_KG}kg + Intercept")
+            st.write("**All water values below are MEASURED values from actual production data.**")
             
             specs_data = []
             for prod, spec in PRODUCT_SPECIFICATIONS.items():
@@ -690,17 +398,14 @@ if st.session_state.analysis_complete and st.session_state.results:
                     "Product": prod,
                     "Type": spec["product_type"],
                     "Formula": spec["formula"],
-                    "Pressed Thickness (mm)": spec["pressed_thickness_mm"],
+                    "Thickness (mm)": spec["pressed_thickness_mm"],
                     "Water/mm (g)": spec["water_per_mm_g"],
                     "Water/Plate (kg)": spec["water_per_plate_kg"],
-                    "Water/m³ (kg)": spec["water_per_m3_kg"],
+                    "Water/m³ (kg)": round(spec["water_per_m3_kg"], 1),
                 })
             
             specs_df = pd.DataFrame(specs_data)
-            
-            with st.expander("📊 View Complete Product Specifications (Table 1)"):
-                st.dataframe(specs_df, use_container_width=True)
-                st.caption(f"Note: x in all formulas represents suspension amount = {SUSPENSION_KG} kg")
+            st.dataframe(specs_df, use_container_width=True, hide_index=True)
             
             # Water curves
             st.subheader("Water Evaporation Curves by Product")
@@ -722,36 +427,19 @@ if st.session_state.analysis_complete and st.session_state.results:
                 if all_curves:
                     combined_curves = pd.concat(all_curves, ignore_index=True)
                     
-                    fig_curves = px.line(
-                        combined_curves,
-                        x="Pressed_Thickness_mm",
-                        y="Water_per_Plate_kg",
-                        color="Product",
-                        markers=True,
-                        title="Water Evaporation vs. Pressed Thickness (Individual Product Formulas)",
-                        labels={
-                            "Pressed_Thickness_mm": "Pressed Thickness (mm)",
-                            "Water_per_Plate_kg": "Water per Plate (kg)"
-                        }
-                    )
+                    fig_curves = px.line(combined_curves, x="Pressed_Thickness_mm", y="Water_per_Plate_kg", color="Product", markers=True,
+                        title="Water Evaporation vs. Pressed Thickness (Using Measured g/mm Values)",
+                        labels={"Pressed_Thickness_mm": "Pressed Thickness (mm)", "Water_per_Plate_kg": "Water per Plate (kg)"})
                     
-                    # Add measured points
                     for prod in products_to_plot:
                         if prod in PRODUCT_SPECIFICATIONS:
                             spec = PRODUCT_SPECIFICATIONS[prod]
-                            fig_curves.add_scatter(
-                                x=[spec["pressed_thickness_mm"]],
-                                y=[spec["water_per_plate_kg"]],
-                                mode='markers',
-                                marker=dict(size=12, symbol='star'),
-                                name=f"{prod} (actual)",
-                                showlegend=True
-                            )
+                            fig_curves.add_scatter(x=[spec["pressed_thickness_mm"]], y=[spec["water_per_plate_kg"]],
+                                mode='markers', marker=dict(size=14, symbol='star'), name=f"{prod} (measured)")
                     
                     fig_curves.update_layout(height=500, plot_bgcolor="white")
                     st.plotly_chart(fig_curves, use_container_width=True)
-                    
-                    st.info("⭐ **Star markers** show actual product specifications. Each product has its own unique curve.")
+                    st.info("⭐ **Star markers** = MEASURED values from production data")
 
             # ===== Monthly Trends =====
             st.markdown('<div class="section-header">📊 Monthly KPI Trends</div>', unsafe_allow_html=True)
@@ -759,29 +447,13 @@ if st.session_state.analysis_complete and st.session_state.results:
             col_m1, col_m2 = st.columns(2)
             
             with col_m1:
-                fig_kwh_m3 = px.line(
-                    summary,
-                    x="Month",
-                    y="kWh_per_m3",
-                    color="Zone",
-                    markers=True,
-                    hover_data=["Produkt", "Energy_kWh", "Volume_m3"],
-                    title="Total Energy Efficiency (kWh/m³)",
-                )
+                fig_kwh_m3 = px.line(summary, x="Month", y="kWh_per_m3", color="Zone", markers=True, title="Energy Efficiency (kWh/m³)")
                 fig_kwh_m3.update_layout(height=400, plot_bgcolor="white")
                 st.plotly_chart(fig_kwh_m3, use_container_width=True)
 
             with col_m2:
                 if "kWh_per_kg" in summary.columns:
-                    fig_kwh_kg = px.line(
-                        summary,
-                        x="Month",
-                        y="kWh_per_kg",
-                        color="Zone",
-                        markers=True,
-                        hover_data=["Produkt", "Energy_kWh", "Water_kg"],
-                        title="Specific Energy (kWh/kg H₂O)",
-                    )
+                    fig_kwh_kg = px.line(summary, x="Month", y="kWh_per_kg", color="Zone", markers=True, title="Specific Energy (kWh/kg H₂O)")
                     fig_kwh_kg.update_layout(height=400, plot_bgcolor="white")
                     st.plotly_chart(fig_kwh_kg, use_container_width=True)
 
@@ -790,342 +462,163 @@ if st.session_state.analysis_complete and st.session_state.results:
 
             col_z1, col_z2 = st.columns(2)
             with col_z1:
-                fig_zone = px.bar(
-                    yearly,
-                    x="Zone",
-                    y="kWh_per_m3",
-                    color="Produkt",
-                    text_auto=".2f",
-                    title="Yearly KPI by Zone (kWh/m³)",
-                )
+                fig_zone = px.bar(yearly, x="Zone", y="kWh_per_m3", color="Produkt", text_auto=".2f", title="KPI by Zone (kWh/m³)")
                 fig_zone.update_layout(height=400, plot_bgcolor="white")
                 st.plotly_chart(fig_zone, use_container_width=True)
 
             with col_z2:
-                fig_pie = px.pie(
-                    yearly,
-                    values="Energy_kWh",
-                    names="Zone",
-                    title="Energy Distribution by Zone",
-                )
+                fig_pie = px.pie(yearly, values="Energy_kWh", names="Zone", title="Energy Distribution by Zone")
                 fig_pie.update_layout(height=400)
                 st.plotly_chart(fig_pie, use_container_width=True)
 
             # ===== Data Tables =====
             with st.expander("📋 View Detailed Data Tables"):
                 tab1, tab2, tab3 = st.tabs(["Monthly Summary", "Yearly Summary", "Product Totals"])
-                
                 with tab1:
                     st.dataframe(summary, use_container_width=True)
-                
                 with tab2:
                     st.dataframe(yearly, use_container_width=True)
-                
                 with tab3:
                     if product_totals is not None:
                         st.dataframe(product_totals, use_container_width=True)
 
-            # ===== Weekly Prediction (AUTOMATIC BASELINE) =====
+            # ===== Weekly Prediction =====
             st.markdown('<div class="section-header">🔮 Weekly Energy Prediction</div>', unsafe_allow_html=True)
 
             wagon_stats = compute_product_wagon_stats(results["wagons"])
             wagon_capacity = wagon_stats.get("wagon_capacity_m3", {})
 
-            # AUTOMATICALLY CALCULATE BASELINE KPIs
-            baseline_thermal_kwh_m3 = float(yearly["kWh_thermal_per_m3"].mean()) if len(yearly) > 0 else 0.0
+            # Automatic baseline KPIs
             baseline_thermal_kwh_kg = float(yearly["kWh_thermal_per_kg"].mean()) if len(yearly) > 0 else 0.0
             baseline_total_kwh_m3 = float(yearly["kWh_per_m3"].mean()) if len(yearly) > 0 else 0.0
             baseline_total_kwh_kg = float(yearly["kWh_per_kg"].mean()) if len(yearly) > 0 else 0.0
 
-            # Show baseline KPIs from historical data
-            st.info(
-                f"📈 **Historical Baseline KPIs** (automatically calculated from your data):\n\n"
-                f"- Thermal: **{baseline_thermal_kwh_kg:.3f} kWh/kg water** "
-                f"({baseline_thermal_kwh_m3:.1f} kWh/m³)\n"
-                f"- Total: **{baseline_total_kwh_kg:.3f} kWh/kg water** "
-                f"({baseline_total_kwh_m3:.1f} kWh/m³)"
-            )
+            st.info(f"📈 **Historical Baseline KPIs** (automatic):\n\n"
+                    f"- Thermal: **{baseline_thermal_kwh_kg:.3f} kWh/kg** | Total: **{baseline_total_kwh_kg:.3f} kWh/kg** ({baseline_total_kwh_m3:.1f} kWh/m³)")
 
-            # Option to use custom values (advanced mode)
-            use_custom_kpis = st.checkbox(
-                "🔧 Use custom KPIs (for scenario testing)", 
-                value=False,
-                help="Enable this to test 'what-if' scenarios with different efficiency targets"
-            )
+            use_custom_kpis = st.checkbox("🔧 Use custom KPIs (scenario testing)", value=False)
 
             if use_custom_kpis:
-                st.write("### Custom KPI Targets")
                 col_kpi1, col_kpi2 = st.columns(2)
-                
                 with col_kpi1:
-                    custom_kwh_m3 = st.number_input(
-                        "Target kWh/m³",
-                        min_value=0.0,
-                        value=baseline_total_kwh_m3,
-                        help="Energy consumption per cubic meter (default: historical average)"
-                    )
-                
+                    prediction_kwh_m3 = st.number_input("Target kWh/m³", min_value=0.0, value=baseline_total_kwh_m3)
                 with col_kpi2:
-                    custom_kwh_kg = st.number_input(
-                        "Target kWh/kg water",
-                        min_value=0.0,
-                        value=baseline_total_kwh_kg,
-                        help="Specific energy per kg of water evaporated (default: historical average)"
-                    )
-                
-                # Use custom values
-                prediction_kwh_m3 = custom_kwh_m3
-                prediction_kwh_kg = custom_kwh_kg
-                
-                # Show difference from baseline
-                diff_m3 = ((custom_kwh_m3 - baseline_total_kwh_m3) / baseline_total_kwh_m3 * 100) if baseline_total_kwh_m3 > 0 else 0
-                diff_kg = ((custom_kwh_kg - baseline_total_kwh_kg) / baseline_total_kwh_kg * 100) if baseline_total_kwh_kg > 0 else 0
-                
-                if abs(diff_m3) > 0.1 or abs(diff_kg) > 0.1:
-                    st.warning(
-                        f"⚠️ **Scenario Test Mode**: You're testing with KPIs that differ from historical baseline:\n"
-                        f"- kWh/m³: {diff_m3:+.1f}% change\n"
-                        f"- kWh/kg: {diff_kg:+.1f}% change"
-                    )
+                    prediction_kwh_kg = st.number_input("Target kWh/kg", min_value=0.0, value=baseline_total_kwh_kg)
             else:
-                # USE HISTORICAL BASELINE AUTOMATICALLY
                 prediction_kwh_m3 = baseline_total_kwh_m3
                 prediction_kwh_kg = baseline_total_kwh_kg
 
-            # Prediction form
             with st.form("weekly_prediction_form"):
                 st.write("### 📅 Planned Production per Week")
-                
-                st.info("💡 Enter the number of wagons you plan to produce for each product type")
-                
                 planned_wagons = {}
-
-                prod_left = ["L28", "L30", "L34", "L36"]
-                prod_mid = ["L38", "L42", "L44"]
-                prod_right = ["N40", "N44", "Y44"]
-
+                
                 col1, col2, col3 = st.columns(3)
-
+                
                 with col1:
-                    st.write("**L-Type Products**")
-                    for p in prod_left:
-                        capacity = wagon_capacity.get(p, 0)
-                        capacity_text = f" ({capacity:.2f} m³/wagon)" if capacity > 0 else " (no data)"
-                        planned_wagons[p] = st.number_input(
-                            f"{p} wagons/week{capacity_text}", 
-                            min_value=0, 
-                            value=0, 
-                            step=10,
-                            key=f"weekly_{p}"
-                        )
+                    st.write("**L-Type (Light)**")
+                    for p in ["L28", "L30", "L34", "L36"]:
+                        cap = wagon_capacity.get(p, 0)
+                        cap_text = f" ({cap:.2f} m³/w)" if cap > 0 else ""
+                        planned_wagons[p] = st.number_input(f"{p}{cap_text}", min_value=0, value=0, step=10, key=f"w_{p}")
 
                 with col2:
-                    st.write("**L-Type Products (Heavy)**")
-                    for p in prod_mid:
-                        capacity = wagon_capacity.get(p, 0)
-                        capacity_text = f" ({capacity:.2f} m³/wagon)" if capacity > 0 else " (no data)"
-                        planned_wagons[p] = st.number_input(
-                            f"{p} wagons/week{capacity_text}", 
-                            min_value=0, 
-                            value=0, 
-                            step=10,
-                            key=f"weekly_{p}"
-                        )
+                    st.write("**L-Type (Heavy)**")
+                    for p in ["L38", "L42", "L44"]:
+                        cap = wagon_capacity.get(p, 0)
+                        cap_text = f" ({cap:.2f} m³/w)" if cap > 0 else ""
+                        planned_wagons[p] = st.number_input(f"{p}{cap_text}", min_value=0, value=0, step=10, key=f"w_{p}")
 
                 with col3:
-                    st.write("**N & Y-Type Products**")
-                    for p in prod_right:
-                        capacity = wagon_capacity.get(p, 0)
-                        capacity_text = f" ({capacity:.2f} m³/wagon)" if capacity > 0 else " (no data)"
-                        planned_wagons[p] = st.number_input(
-                            f"{p} wagons/week{capacity_text}", 
-                            min_value=0, 
-                            value=0, 
-                            step=10,
-                            key=f"weekly_{p}"
-                        )
+                    st.write("**N & Y-Type**")
+                    for p in ["N40", "N44", "Y44"]:
+                        cap = wagon_capacity.get(p, 0)
+                        cap_text = f" ({cap:.2f} m³/w)" if cap > 0 else ""
+                        planned_wagons[p] = st.number_input(f"{p}{cap_text}", min_value=0, value=0, step=10, key=f"w_{p}")
 
-                submitted_weekly = st.form_submit_button("🔮 Calculate Weekly Prediction", type="primary")
+                submitted = st.form_submit_button("🔮 Calculate Prediction", type="primary")
 
-            if submitted_weekly:
+            if submitted:
                 product_volumes = {}
                 total_wagons = 0
                 
                 for prod, wagons in planned_wagons.items():
                     if wagons > 0:
-                        capacity = wagon_capacity.get(prod, 1.5)
-                        if capacity == 0:
-                            st.warning(f"⚠️ No historical data for {prod} wagon capacity, using default 1.5 m³")
-                            capacity = 1.5
+                        capacity = wagon_capacity.get(prod, 1.5) or 1.5
                         product_volumes[prod] = wagons * capacity
                         total_wagons += wagons
                 
                 if product_volumes:
-                    # USE AUTOMATIC BASELINE KPIs
-                    detailed_pred = predict_production_energy(
-                        product_volumes_m3=product_volumes,
-                        baseline_kwh_per_m3=prediction_kwh_m3,
-                        baseline_kwh_per_kg=prediction_kwh_kg,
-                        use_formulas=True
-                    )
+                    pred = predict_production_energy(product_volumes_m3=product_volumes, baseline_kwh_per_m3=prediction_kwh_m3, baseline_kwh_per_kg=prediction_kwh_kg, use_formulas=True)
                     
                     st.markdown("---")
-                    st.subheader("📊 Weekly Production Forecast")
+                    st.subheader("📊 Weekly Forecast")
                     
-                    # Summary metrics
-                    col_r1, col_r2, col_r3, col_r4 = st.columns(4)
+                    c1, c2, c3, c4 = st.columns(4)
+                    with c1:
+                        st.metric("Total Wagons", f"{total_wagons:,}")
+                    with c2:
+                        st.metric("Total Volume", f"{pred['total_volume_m3']:,.1f} m³")
+                    with c3:
+                        st.metric("Water to Evaporate", f"{pred['total_water_kg']:,.0f} kg")
+                    with c4:
+                        if pred.get("total_energy_kwh", 0) > 0:
+                            energy = pred["total_energy_kwh"]
+                            st.metric("Energy Required", f"{energy:,.0f} kWh")
+                            st.caption(f"📅 {energy/7:,.0f} kWh/day | ⏱️ {energy/168:,.0f} kWh/hour")
                     
-                    with col_r1:
-                        st.metric(
-                            "Total Wagons", 
-                            f"{total_wagons:,}",
-                            help="Total wagons planned for production"
-                        )
+                    if pred.get("products"):
+                        st.write("### 📦 Product Breakdown (MEASURED Values)")
+                        breakdown = pd.DataFrame(pred["products"])
+                        
+                        display_cols = {
+                            "product": "Product", "formula": "Formula", "volume_m3": "Volume (m³)",
+                            "num_plates": "Plates", "water_per_mm_g": "Water/mm (g)",
+                            "water_per_plate_kg": "Water/Plate (kg)", "water_kg": "Total Water (kg)",
+                        }
+                        if "energy_from_water_kwh" in breakdown.columns:
+                            display_cols["energy_from_water_kwh"] = "Energy (kWh)"
+                        
+                        breakdown = breakdown.rename(columns=display_cols)
+                        cols = [c for c in display_cols.values() if c in breakdown.columns]
+                        st.dataframe(breakdown[cols], use_container_width=True, hide_index=True)
                     
-                    with col_r2:
-                        st.metric(
-                            "Total Volume", 
-                            f"{detailed_pred['total_volume_m3']:,.1f} m³",
-                            help="Total cubic meters of product"
-                        )
-                    
-                    with col_r3:
-                        st.metric(
-                            "Water to Evaporate", 
-                            f"{detailed_pred['total_water_kg']:,.0f} kg",
-                            help="Total water that needs to be dried"
-                        )
-                    
-                    with col_r4:
-                        if detailed_pred.get("total_energy_kwh", 0) > 0:
-                            energy_week = detailed_pred["total_energy_kwh"]
-                            st.metric(
-                                "Energy Required", 
-                                f"{energy_week:,.0f} kWh",
-                                help="Total energy needed for the week"
-                            )
-                            
-                            # Daily and hourly breakdown
-                            energy_day = energy_week / 7
-                            energy_hour = energy_day / 24
-                            
-                            st.caption(f"📅 Daily: {energy_day:,.0f} kWh/day")
-                            st.caption(f"⏱️ Hourly: {energy_hour:,.0f} kWh/hour")
-                    
-                    # Product breakdown table
-                    if detailed_pred.get("products"):
-                        st.write("### 📦 Product-Level Breakdown")
-                        
-                        product_breakdown = pd.DataFrame(detailed_pred["products"])
-                        
-                        # Add formula info for display
-                        for idx, row in product_breakdown.iterrows():
-                            prod = row["product"]
-                            if prod in PRODUCT_SPECIFICATIONS:
-                                product_breakdown.loc[idx, "Formula"] = PRODUCT_SPECIFICATIONS[prod]["formula"]
-                        
-                        # Rename columns for better display
-                        display_df = product_breakdown.rename(columns={
-                            "product": "Product",
-                            "volume_m3": "Volume (m³)",
-                            "water_per_m3_kg": "Water Density (kg/m³)",
-                            "water_kg": "Total Water (kg)",
-                            "num_plates": "Plates",
-                            "water_per_plate_kg": "Water/Plate (kg)",
-                            "energy_from_water_kwh": "Energy (kWh)",
-                            "Formula": "Formula Used"
-                        })
-                        
-                        # Select and order columns
-                        cols_to_show = ["Product", "Formula Used", "Volume (m³)", "Plates", 
-                                       "Water Density (kg/m³)", "Total Water (kg)", "Water/Plate (kg)"]
-                        
-                        if "Energy (kWh)" in display_df.columns:
-                            cols_to_show.append("Energy (kWh)")
-                        
-                        # Filter to existing columns
-                        cols_to_show = [c for c in cols_to_show if c in display_df.columns]
-                        display_df = display_df[cols_to_show]
-                        
-                        st.dataframe(display_df, use_container_width=True)
-                    
-                    # Show calculation method
                     with st.expander("🔍 How is this calculated?"):
-                        # Get formula values for display
-                        l36_formula = PRODUCT_SPECIFICATIONS.get('L36', {}).get('formula', '-0.025x + 76.6')
-                        l36_water_mm = PRODUCT_SPECIFICATIONS.get('L36', {}).get('water_per_mm_g', 68.35)
-                        n40_formula = PRODUCT_SPECIFICATIONS.get('N40', {}).get('formula', '-0.103x + 120.5')
-                        n40_water_mm = PRODUCT_SPECIFICATIONS.get('N40', {}).get('water_per_mm_g', 86.51)
-                        y44_formula = PRODUCT_SPECIFICATIONS.get('Y44', {}).get('formula', '-0.160x + 200.0')
-                        y44_water_mm = PRODUCT_SPECIFICATIONS.get('Y44', {}).get('water_per_mm_g', 147.20)
-                        
-                        baseline_source = 'Custom scenario values' if use_custom_kpis else '**Automatically calculated from your historical data**'
-                        
                         st.markdown(f"""
-                        **Calculation Method (Individual Product Formulas - Table 1):**
-                        
-                        **1. Volume Calculation:**
-                        - Wagons × Average wagon capacity = Total volume (m³)
-                           
-                        **2. Water Calculation (Product-Specific Formulas):**
-                        - Each product has its own formula where **x = {SUSPENSION_KG} kg** suspension
-                        - Example formulas:
-                          * **L36:** `{l36_formula}` → **{l36_water_mm:.2f} g/mm**
-                          * **N40:** `{n40_formula}` → **{n40_water_mm:.2f} g/mm**
-                          * **Y44:** `{y44_formula}` → **{y44_water_mm:.2f} g/mm**
-                        - Total water per plate = (water_per_mm × pressed_thickness) / 1000
-                           
-                        **3. Energy Prediction:**
-                        - **Method used:** kWh/kg water (most accurate)
-                        - **Baseline KPI:** {prediction_kwh_kg:.3f} kWh/kg
-                        - **Energy = Total water (kg) × Baseline KPI**
-                           
-                        **4. Baseline KPI Source:**
-                        - {baseline_source}
-                        - Based on actual performance from uploaded files
-                           
-                        **5. Formula Accuracy:**
-                        - Using individual product formulas (Table 1) for maximum accuracy
-                        - Each product type has unique water evaporation characteristics
-                        - More accurate than type-averaged formulas (10-30% improvement)
-                        """)
-                        
-                        # Show formula table
-                        st.write("**All Product Formulas:**")
-                        formula_data = []
-                        for prod, spec in PRODUCT_SPECIFICATIONS.items():
-                            formula_data.append({
-                                "Product": prod,
-                                "Formula": spec["formula"],
-                                "x (Suspension)": f"{SUSPENSION_KG} kg",
-                                "Water/mm (g)": f"{spec['water_per_mm_g']:.2f}",
-                                "Thickness (mm)": spec["pressed_thickness_mm"],
-                                "Water/Plate (kg)": f"{spec['water_per_plate_kg']:.2f}",
-                            })
-                        formula_df = pd.DataFrame(formula_data)
-                        st.dataframe(formula_df, use_container_width=True, hide_index=True)
-                        
-                        if use_custom_kpis:
-                            st.warning(
-                                "⚠️ You're using **custom KPI values** for scenario testing. "
-                                "Disable 'Use custom KPIs' to use actual historical performance."
-                            )
+**Calculation Method (MEASURED Values from Table 1):**
+
+**1. Volume:**
+- Wagons × Wagon capacity = Total volume (m³)
+
+**2. Water Calculation (MEASURED per product):**
+
+| Product | Formula | Water/mm (g) | Water/Plate (kg) |
+|---------|---------|--------------|------------------|
+| L36 | -0.025×330 + 76.6 | **68** | **2.87** |
+| L38 | -0.058×330 + 110.5 | **91** | **4.11** |
+| N40 | -0.103×330 + 102.5 | **69** | **3.43** |
+| Y44 | -0.157×330 + 200.0 | **148** | **8.30** |
+
+All values above are **MEASURED**, not calculated!
+
+**3. Energy:**
+- Energy = Total water (kg) × {prediction_kwh_kg:.3f} kWh/kg
+
+**4. Baseline:**
+- {'Custom scenario values' if use_custom_kpis else 'Automatic from historical data'}
+""")
+                    
+                    st.success("✅ Prediction complete using MEASURED water values!")
+                else:
+                    st.warning("⚠️ Enter wagon counts for at least one product.")
 
             # ===== Export =====
-            st.markdown('<div class="section-header">📥 Export Results</div>', unsafe_allow_html=True)
-
+            st.markdown('<div class="section-header">📥 Export</div>', unsafe_allow_html=True)
             excel_data = create_excel_download(results)
-            st.download_button(
-                label="📥 Download Complete Excel Report",
-                data=excel_data,
-                file_name="Dryer_KPI_Analysis.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            )
+            st.download_button("📥 Download Excel Report", excel_data, "Dryer_KPI_Analysis.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-            st.success("✅ Analysis complete! Individual product formulas (Table 1) active for all calculations.")
+            st.success("✅ Analysis complete using MEASURED values from Table 1!")
 
-    except Exception as display_error:
-        st.error(f"❌ Error displaying results: {display_error}")
-        if enable_debug_mode:
-            with st.expander("🔍 View Error Details"):
-                st.code(traceback.format_exc())
+    except Exception as e:
+        st.error(f"❌ Display error: {e}")
+        with st.expander("Details"):
+            st.exception(e)
