@@ -1,11 +1,6 @@
 """
 Lindner Dryer KPI Calculation Module
-Using EXACT MEASURED VALUES from Table 1 (Wasserverlust-Platten)
-
-Formula: water_per_mm_g = slope × suspension_kg + intercept
-Where x = Suspensionsmenge = 330 kg
-
-All water values are from actual measurements, not calculated.
+Using MEASURED Values from Table 1 with CORRECTED Energy Allocation
 """
 
 import pandas as pd
@@ -29,8 +24,9 @@ CONFIG = {
     "energy_sheet": 0,
     "wagon_sheet": "Hordenwagenverfolgung",
     "wagon_header_row": 6,
-    "gas_to_kwh": 11.5,
+    "gas_to_kwh": 11.5,  # Calorific value of natural gas (kWh/m³)
     "zones_seq": ["Z1", "Z2", "Z3", "Z4", "Z5"],
+    "num_thermal_zones": 4,  # Z2, Z3, Z4, Z5 (Z1 has no heating)
 }
 
 # ---------------------------------------------------------
@@ -44,15 +40,12 @@ ZONE_ENERGY_MAPPING = {
 }
 
 # ---------------------------------------------------------
-# SUSPENSION AMOUNT (fixed for all products)
-# x = Suspensionsmenge = 330 kg
+# SUSPENSION AMOUNT
 # ---------------------------------------------------------
 SUSPENSION_KG = 330
 
 # ---------------------------------------------------------
-# PRODUCT SPECIFICATIONS WITH EXACT MEASURED VALUES
-# Source: Wasserverlust-Platten-W1-Endmass Table
-# All water values are MEASURED, not calculated
+# PRODUCT SPECIFICATIONS (MEASURED VALUES FROM TABLE 1)
 # ---------------------------------------------------------
 PRODUCT_SPECIFICATIONS = {
     "L28": {
@@ -66,8 +59,8 @@ PRODUCT_SPECIFICATIONS = {
         "slope": -0.060,
         "intercept": 107.7,
         "formula": "-0.060x + 107.7",
-        "water_per_mm_g": 88,  # MEASURED value
-        "water_per_plate_kg": 2.81,  # MEASURED value
+        "water_per_mm_g": 88,
+        "water_per_plate_kg": 2.81,
     },
     "L30": {
         "product_type": "L",
@@ -80,8 +73,8 @@ PRODUCT_SPECIFICATIONS = {
         "slope": -0.042,
         "intercept": 102.3,
         "formula": "-0.042x + 102.3",
-        "water_per_mm_g": 88,  # MEASURED value
-        "water_per_plate_kg": 3.01,  # MEASURED value
+        "water_per_mm_g": 88,
+        "water_per_plate_kg": 3.01,
     },
     "L34": {
         "product_type": "L",
@@ -94,8 +87,8 @@ PRODUCT_SPECIFICATIONS = {
         "slope": -0.056,
         "intercept": 111.9,
         "formula": "-0.056x + 111.9",
-        "water_per_mm_g": 93,  # MEASURED value
-        "water_per_plate_kg": 3.64,  # MEASURED value
+        "water_per_mm_g": 93,
+        "water_per_plate_kg": 3.64,
     },
     "L36": {
         "product_type": "L",
@@ -108,8 +101,8 @@ PRODUCT_SPECIFICATIONS = {
         "slope": -0.025,
         "intercept": 76.6,
         "formula": "-0.025x + 76.6",
-        "water_per_mm_g": 68,  # MEASURED value
-        "water_per_plate_kg": 2.87,  # MEASURED value
+        "water_per_mm_g": 68,
+        "water_per_plate_kg": 2.87,
     },
     "L38": {
         "product_type": "L",
@@ -122,8 +115,8 @@ PRODUCT_SPECIFICATIONS = {
         "slope": -0.058,
         "intercept": 110.5,
         "formula": "-0.058x + 110.5",
-        "water_per_mm_g": 91,  # MEASURED value
-        "water_per_plate_kg": 4.11,  # MEASURED value
+        "water_per_mm_g": 91,
+        "water_per_plate_kg": 4.11,
     },
     "L42": {
         "product_type": "L",
@@ -136,8 +129,8 @@ PRODUCT_SPECIFICATIONS = {
         "slope": -0.007,
         "intercept": 74.2,
         "formula": "-0.007x + 74.2",
-        "water_per_mm_g": 72,  # MEASURED value
-        "water_per_plate_kg": 3.59,  # MEASURED value
+        "water_per_mm_g": 72,
+        "water_per_plate_kg": 3.59,
     },
     "L44": {
         "product_type": "L",
@@ -150,8 +143,8 @@ PRODUCT_SPECIFICATIONS = {
         "slope": -0.011,
         "intercept": 77.4,
         "formula": "-0.011x + 77.4",
-        "water_per_mm_g": 74,  # MEASURED value
-        "water_per_plate_kg": 3.91,  # MEASURED value
+        "water_per_mm_g": 74,
+        "water_per_plate_kg": 3.91,
     },
     "N40": {
         "product_type": "N",
@@ -162,10 +155,10 @@ PRODUCT_SPECIFICATIONS = {
         "volume_m3": 0.0181,
         "suspension_kg": 330,
         "slope": -0.103,
-        "intercept": 102.5,  # CORRECTED from 120.5
+        "intercept": 102.5,
         "formula": "-0.103x + 102.5",
-        "water_per_mm_g": 69,  # MEASURED value
-        "water_per_plate_kg": 3.43,  # MEASURED value
+        "water_per_mm_g": 69,
+        "water_per_plate_kg": 3.43,
     },
     "N44": {
         "product_type": "N",
@@ -178,8 +171,8 @@ PRODUCT_SPECIFICATIONS = {
         "slope": -0.017,
         "intercept": 78.5,
         "formula": "-0.017x + 78.5",
-        "water_per_mm_g": 73,  # MEASURED value
-        "water_per_plate_kg": 4.01,  # MEASURED value
+        "water_per_mm_g": 73,
+        "water_per_plate_kg": 4.01,
     },
     "Y44": {
         "product_type": "Y",
@@ -189,28 +182,18 @@ PRODUCT_SPECIFICATIONS = {
         "edge_length_mm": 602,
         "volume_m3": 0.0203,
         "suspension_kg": 330,
-        "slope": -0.157,  # CORRECTED from -0.160
+        "slope": -0.157,
         "intercept": 200.0,
         "formula": "-0.157x + 200.0",
-        "water_per_mm_g": 148,  # MEASURED value
-        "water_per_plate_kg": 8.30,  # MEASURED value
+        "water_per_mm_g": 148,
+        "water_per_plate_kg": 8.30,
     },
 }
 
-# Calculate water_per_m3_kg for each product using MEASURED values
-logger.info("=== Using EXACT MEASURED Water Values from Table 1 ===")
+# Calculate water_per_m3_kg for each product
 for product, spec in PRODUCT_SPECIFICATIONS.items():
-    # Water per m³ = water_per_plate / volume_per_plate
     spec["water_per_m3_kg"] = spec["water_per_plate_kg"] / spec["volume_m3"]
-    
-    logger.info(
-        f"{product}: {spec['water_per_mm_g']} g/mm | "
-        f"{spec['water_per_plate_kg']:.2f} kg/plate | "
-        f"{spec['water_per_m3_kg']:.1f} kg/m³ | "
-        f"Formula: {spec['formula']}"
-    )
 
-# Create lookup dictionary for water per m³
 WATER_PER_M3_KG = {
     product: spec["water_per_m3_kg"]
     for product, spec in PRODUCT_SPECIFICATIONS.items()
@@ -224,20 +207,15 @@ def parse_duration_series(s: pd.Series) -> pd.Series:
     """Convert 'Zeit in Zx' text to Timedelta."""
     s = s.astype(str).str.strip()
     s = s.str.replace(",", ".", regex=False)
-
     s = s.str.replace(r"\bh\b", "hours", regex=True)
     s = s.str.replace(r"\bmin\b", "minutes", regex=True)
     s = s.str.replace(r"\bst\b", "seconds", regex=True)
-
     s = s.replace({r"^\s*$": np.nan, r"^-$": np.nan}, regex=True)
-
     td = pd.to_timedelta(s, errors="coerce")
-
     mask_nat = td.isna() & s.notna()
     if mask_nat.any():
         dt = pd.to_datetime(s[mask_nat], errors="coerce")
         td.loc[mask_nat] = dt - pd.Timestamp("1900-01-01")
-
     return td
 
 
@@ -245,7 +223,12 @@ def parse_duration_series(s: pd.Series) -> pd.Series:
 # ENERGY PARSING
 # =====================================================================
 def parse_energy(df: pd.DataFrame) -> pd.DataFrame:
-    """Parse hourly energy consumption (thermal + electrical)."""
+    """
+    Parse hourly energy consumption.
+    
+    Thermal: Gas (m³) × 11.5 kWh/m³ per zone
+    Electrical: Direct from meter (total for dryer)
+    """
     logger.info("Parsing energy data...")
     df = df.copy()
 
@@ -255,23 +238,28 @@ def parse_energy(df: pd.DataFrame) -> pd.DataFrame:
     df["Month"] = df["Zeitstempel"].dt.month
     df["Year"] = df["Zeitstempel"].dt.year
 
-    # Convert gas consumption to kWh for each zone (THERMAL)
+    # Convert gas consumption to kWh for each zone
     for z_key, z_name in ZONE_ENERGY_MAPPING.items():
         gas_col = f"Gasmenge, {z_name} [m³]"
         thermal_col = f"E_thermal_{z_name}_kWh"
         
         if gas_col in df.columns:
-            df[thermal_col] = pd.to_numeric(df[gas_col], errors='coerce').fillna(0) * CONFIG["gas_to_kwh"]
+            gas_values = pd.to_numeric(df[gas_col], errors='coerce').fillna(0)
+            df[thermal_col] = gas_values * CONFIG["gas_to_kwh"]
+            logger.info(f"  {z_key}: Gas column found, converted {gas_values.sum():.0f} m³ → {df[thermal_col].sum():.0f} kWh")
         else:
             df[thermal_col] = 0.0
+            logger.warning(f"  {z_key}: Gas column '{gas_col}' not found")
 
-    # Parse electrical energy (ELECTRICAL)
+    # Electrical energy (total for dryer)
     if "Energieverbrauch, elektr. [kWh]" in df.columns:
         df["E_el_kWh"] = pd.to_numeric(
             df["Energieverbrauch, elektr. [kWh]"], errors='coerce'
         ).fillna(0.0)
+        logger.info(f"  Electrical: {df['E_el_kWh'].sum():.0f} kWh total")
     else:
         df["E_el_kWh"] = 0.0
+        logger.warning("  Electrical column not found")
 
     df["E_start"] = df["Zeitstempel"]
     df["E_end"] = df["Zeitstempel"] + pd.Timedelta(hours=1)
@@ -290,7 +278,6 @@ def parse_wagon(df: pd.DataFrame) -> pd.DataFrame:
 
     df.columns = [str(c).replace("\n", " ").strip() for c in df.columns]
 
-    # dryer entry time
     if "Pressdat. + Zeit" in df.columns:
         df["t0"] = pd.to_datetime(df["Pressdat. + Zeit"], errors="coerce")
     else:
@@ -298,26 +285,22 @@ def parse_wagon(df: pd.DataFrame) -> pd.DataFrame:
         time = df.get("Press-Zeit", pd.Series()).astype(str)
         df["t0"] = pd.to_datetime(date + " " + time, errors="coerce")
 
-    # find wagon number column
     for col in df.columns:
         if str(col).startswith("WG-"):
             df = df.rename(columns={col: "WG_Nr"})
             break
 
-    # clean product names
     if "Produkt" in df.columns:
         df["Produkt"] = df["Produkt"].astype(str).str.strip()
     else:
         df["Produkt"] = "Unknown"
 
-    # volume
     if "m³" in df.columns:
         df["m3"] = pd.to_numeric(df["m³"], errors="coerce")
     else:
         thick = pd.to_numeric(df.get("Stärke", 0), errors="coerce")
         df["m3"] = 0.605 * 0.605 * (thick + 7) / 1000.0
 
-    # zone entry timestamps
     for z in ("Z2", "Z3", "Z4", "Z5"):
         col = f"In {z}"
         df[f"{z}_in"] = (
@@ -325,16 +308,13 @@ def parse_wagon(df: pd.DataFrame) -> pd.DataFrame:
             if col in df.columns else pd.NaT
         )
 
-    # Z1
     df["Z1_in"] = df["t0"]
 
-    # exit time
     if "Entnahme-Zeit" in df.columns:
         df["Entnahme"] = pd.to_datetime(df["Entnahme-Zeit"], errors="coerce", dayfirst=True)
     else:
         df["Entnahme"] = pd.NaT
 
-    # estimated durations
     pairs = [
         ("Z1", "Z2_in", "t0"),
         ("Z2", "Z3_in", "Z2_in"),
@@ -347,14 +327,11 @@ def parse_wagon(df: pd.DataFrame) -> pd.DataFrame:
         hours = (df[later] - df[earlier]).dt.total_seconds() / 3600
         df[f"{z}_dur_calc"] = hours
 
-    # parse & validate text durations
     for z in CONFIG["zones_seq"]:
         txt = f"Zeit in {z}"
         calc = f"{z}_dur_calc"
         out = f"{z}_dur"
-
         df[out] = pd.to_timedelta(df[calc], unit="h")
-
         if txt in df.columns:
             parsed = parse_duration_series(df[txt])
             mask = parsed.isna() | (parsed.dt.total_seconds() < 3600)
@@ -362,7 +339,6 @@ def parse_wagon(df: pd.DataFrame) -> pd.DataFrame:
 
     df["Month"] = df["t0"].dt.month
     df["Year"] = df["t0"].dt.year
-
     df = df[df["t0"].notna()].copy()
     
     logger.info(f"Parsed {len(df)} wagon records")
@@ -417,11 +393,20 @@ def explode_intervals(df: pd.DataFrame) -> pd.DataFrame:
 
 
 # =====================================================================
-# ENERGY ALLOCATION (NO NEGATIVE VALUES)
+# ENERGY ALLOCATION (CORRECTED - PROPORTIONAL SHARING)
 # =====================================================================
 def allocate_energy(e: pd.DataFrame, ivals: pd.DataFrame) -> pd.DataFrame:
-    """Allocate energy to products based on time overlap."""
-    logger.info("Allocating energy to products...")
+    """
+    Allocate energy to products based on time overlap.
+    
+    IMPORTANT: Energy is SHARED PROPORTIONALLY among all products 
+    present in a zone during each hour.
+    
+    Formula:
+    - Share = (Product Overlap Hours) / (Sum of All Overlaps in that Hour)
+    - Allocated Energy = Zone Energy × Share
+    """
+    logger.info("Allocating energy to products (proportional sharing)...")
     results = []
 
     for z_key, z_name in ZONE_ENERGY_MAPPING.items():
@@ -438,7 +423,7 @@ def allocate_energy(e: pd.DataFrame, ivals: pd.DataFrame) -> pd.DataFrame:
             logger.warning(f"No data for {z_key}")
             continue
 
-        logger.info(f"Processing {z_key}: {len(e_zone)} energy × {len(iv_zone)} intervals")
+        logger.info(f"Processing {z_key}: {len(e_zone)} energy hours × {len(iv_zone)} intervals")
 
         chunk = 1000
         zone_res = []
@@ -465,46 +450,49 @@ def allocate_energy(e: pd.DataFrame, ivals: pd.DataFrame) -> pd.DataFrame:
                 continue
 
             # Calculate overlap
-            merged["latest_start"] = merged[["E_start","P_start"]].max(axis=1)
-            merged["earliest_end"] = merged[["E_end","P_end"]].min(axis=1)
+            merged["latest_start"] = merged[["E_start", "P_start"]].max(axis=1)
+            merged["earliest_end"] = merged[["E_end", "P_end"]].min(axis=1)
             
-            # Calculate overlap in hours
+            # Calculate overlap in hours (0 to 1)
             merged["Overlap_h"] = (
                 (merged["earliest_end"] - merged["latest_start"])
                 .dt.total_seconds() / 3600
-            )
+            ).clip(lower=0, upper=1)
             
-            # Filter out negative or zero overlaps
+            # Filter out zero overlaps
             merged = merged[merged["Overlap_h"] > 0].copy()
 
             if merged.empty:
                 continue
-            
-            # Remove duplicates
-            merged = merged.drop_duplicates(
-                subset=["E_start", "WG_Nr", "Produkt"],
-                keep="first"
-            )
 
-            # Allocate thermal energy
-            merged["Energy_thermal_kWh"] = merged[thermal_col] * merged["Overlap_h"]
+            # ✅ CORRECTED: Calculate TOTAL overlap per energy hour
+            merged["E_hour_id"] = merged["E_start"].astype(str)
+            total_overlap = merged.groupby("E_hour_id")["Overlap_h"].transform("sum")
             
-            # Allocate electrical energy proportionally
-            merged["Energy_electrical_kWh"] = merged["E_el_kWh"] * merged["Overlap_h"]
+            # ✅ Calculate proportional share
+            merged["Share"] = merged["Overlap_h"] / total_overlap.replace(0, 1)
+            
+            # ✅ Allocate thermal energy proportionally
+            merged["Energy_thermal_kWh"] = merged[thermal_col] * merged["Share"]
+            
+            # ✅ Allocate electrical energy proportionally
+            # Electrical is total for dryer, divide by number of active zones
+            merged["Energy_electrical_kWh"] = (merged["E_el_kWh"] / CONFIG["num_thermal_zones"]) * merged["Share"]
+            
+            # Cleanup
+            merged.drop("E_hour_id", axis=1, inplace=True)
 
             # Month detection
             if "Month_e" in merged.columns:
                 month_col = "Month_e"
             elif "Month_p" in merged.columns:
                 month_col = "Month_p"
-            elif "Month" in merged.columns:
-                month_col = "Month"
             else:
                 merged["Month"] = merged["E_start"].dt.month
                 month_col = "Month"
 
             result = merged[[
-                month_col, "Produkt", "m3", "Overlap_h", 
+                month_col, "Produkt", "m3", "Overlap_h", "Share",
                 "Energy_thermal_kWh", "Energy_electrical_kWh"
             ]].copy()
 
@@ -524,7 +512,7 @@ def allocate_energy(e: pd.DataFrame, ivals: pd.DataFrame) -> pd.DataFrame:
             final["Energy_thermal_kWh"] + final["Energy_electrical_kWh"]
         )
         
-        # Final safety check - remove negative values
+        # Remove negative values
         final = final[
             (final["Energy_thermal_kWh"] >= 0) &
             (final["Energy_electrical_kWh"] >= 0) &
@@ -532,61 +520,35 @@ def allocate_energy(e: pd.DataFrame, ivals: pd.DataFrame) -> pd.DataFrame:
             (final["m3"] > 0)
         ].copy()
         
-        logger.info(f"Allocated {len(final)} energy records (all positive)")
+        logger.info(f"Allocated {len(final)} energy records")
         return final
     
     logger.warning("No energy could be allocated")
     return pd.DataFrame(columns=[
         "Month", "Produkt", "Zone", "Energy_thermal_kWh", 
-        "Energy_electrical_kWh", "Energy_share_kWh", "Overlap_h", "m3"
+        "Energy_electrical_kWh", "Energy_share_kWh", "Overlap_h", "Share", "m3"
     ])
 
 
 # =====================================================================
-# ADD WATER KPIs (USING MEASURED VALUES)
+# ADD WATER KPIs
 # =====================================================================
 def add_water_kpis(df: pd.DataFrame) -> pd.DataFrame:
-    """Add Water_kg and kWh_per_kg using MEASURED values from table."""
+    """Add Water_kg and kWh_per_kg using measured values."""
     df = df.copy()
 
-    # Map water density using measured values
     df["water_per_m3_bench"] = df["Produkt"].map(WATER_PER_M3_KG)
-    
-    # Fill missing products with average
     avg_water_density = pd.Series(WATER_PER_M3_KG).mean()
     df["water_per_m3_bench"] = df["water_per_m3_bench"].fillna(avg_water_density)
     
-    # Calculate water evaporated
     df["Water_kg"] = df["Volume_m3"] * df["water_per_m3_bench"]
     
-    # Calculate KPIs with safe division
-    df["kWh_thermal_per_m3"] = np.where(
-        df["Volume_m3"] > 0,
-        df["Energy_thermal_kWh"] / df["Volume_m3"],
-        0
-    )
+    df["kWh_thermal_per_m3"] = np.where(df["Volume_m3"] > 0, df["Energy_thermal_kWh"] / df["Volume_m3"], 0)
+    df["kWh_per_m3"] = np.where(df["Volume_m3"] > 0, df["Energy_kWh"] / df["Volume_m3"], 0)
+    df["kWh_thermal_per_kg"] = np.where(df["Water_kg"] > 0, df["Energy_thermal_kWh"] / df["Water_kg"], 0)
+    df["kWh_per_kg"] = np.where(df["Water_kg"] > 0, df["Energy_kWh"] / df["Water_kg"], 0)
     
-    df["kWh_per_m3"] = np.where(
-        df["Volume_m3"] > 0,
-        df["Energy_kWh"] / df["Volume_m3"],
-        0
-    )
-    
-    df["kWh_thermal_per_kg"] = np.where(
-        df["Water_kg"] > 0,
-        df["Energy_thermal_kWh"] / df["Water_kg"],
-        0
-    )
-    
-    df["kWh_per_kg"] = np.where(
-        df["Water_kg"] > 0,
-        df["Energy_kWh"] / df["Water_kg"],
-        0
-    )
-    
-    # Clip any negative values
-    numeric_cols = ["kWh_thermal_per_m3", "kWh_per_m3", "kWh_thermal_per_kg", "kWh_per_kg"]
-    for col in numeric_cols:
+    for col in ["kWh_thermal_per_m3", "kWh_per_m3", "kWh_thermal_per_kg", "kWh_per_kg"]:
         if col in df.columns:
             df[col] = df[col].clip(lower=0)
     
@@ -594,56 +556,24 @@ def add_water_kpis(df: pd.DataFrame) -> pd.DataFrame:
 
 
 # =====================================================================
-# WATER-LOSS CALCULATION FUNCTIONS (USING MEASURED VALUES)
+# WATER CALCULATION FUNCTIONS
 # =====================================================================
 def calculate_water_per_plate(product: str, pressed_thickness_mm: float = None) -> float:
-    """
-    Get water evaporation per plate using MEASURED value from table.
-    
-    Args:
-        product: Product code (e.g., "L36", "N40")
-        pressed_thickness_mm: Not used - returns measured value
-    
-    Returns:
-        Water evaporation in kg per plate (MEASURED)
-    """
+    """Get measured water evaporation per plate."""
     if product not in PRODUCT_SPECIFICATIONS:
-        logger.warning(f"Product {product} not in specifications")
         return 0.0
-    
-    spec = PRODUCT_SPECIFICATIONS[product]
-    return spec["water_per_plate_kg"]
+    return PRODUCT_SPECIFICATIONS[product]["water_per_plate_kg"]
 
 
 def calculate_water_per_m3_formula(product: str) -> float:
-    """
-    Get water per m³ using MEASURED value from table.
-    
-    Args:
-        product: Product code
-    
-    Returns:
-        Water density in kg/m³ (MEASURED)
-    """
+    """Get measured water per m³."""
     if product not in PRODUCT_SPECIFICATIONS:
         return WATER_PER_M3_KG.get(product, 200.0)
-    
-    spec = PRODUCT_SPECIFICATIONS[product]
-    return spec["water_per_m3_kg"]
+    return PRODUCT_SPECIFICATIONS[product]["water_per_m3_kg"]
 
 
 def get_product_water_curve(product: str, thickness_range: list = None) -> pd.DataFrame:
-    """
-    Generate water evaporation curve for a product across thickness range.
-    Uses measured water_per_mm value.
-    
-    Args:
-        product: Product code
-        thickness_range: List of thicknesses to evaluate [min, max]
-    
-    Returns:
-        DataFrame with thickness and water evaporation
-    """
+    """Generate water evaporation curve."""
     if product not in PRODUCT_SPECIFICATIONS:
         return pd.DataFrame()
     
@@ -655,11 +585,7 @@ def get_product_water_curve(product: str, thickness_range: list = None) -> pd.Da
         thickness_range = [int(center * 0.7), int(center * 1.3)]
     
     thicknesses = np.linspace(thickness_range[0], thickness_range[1], 50)
-    water_values = []
-    
-    for t in thicknesses:
-        water_kg = (water_per_mm * t) / 1000.0
-        water_values.append(water_kg)
+    water_values = [(water_per_mm * t) / 1000.0 for t in thicknesses]
     
     return pd.DataFrame({
         "Pressed_Thickness_mm": thicknesses,
@@ -675,18 +601,7 @@ def predict_production_energy(
     baseline_kwh_per_kg: float = None,
     use_formulas: bool = True
 ) -> dict:
-    """
-    Predict energy using MEASURED water values.
-    
-    Args:
-        product_volumes_m3: dict like {"L36": 100.5, "N40": 50.2} (m³)
-        baseline_kwh_per_m3: Energy efficiency (kWh/m³)
-        baseline_kwh_per_kg: Specific energy (kWh/kg water)
-        use_formulas: If True, use measured values
-    
-    Returns:
-        dict with detailed predictions per product
-    """
+    """Predict energy using measured values."""
     results = {
         "products": [],
         "total_volume_m3": 0,
@@ -698,7 +613,6 @@ def predict_production_energy(
         if volume_m3 is None or volume_m3 <= 0:
             continue
         
-        # Get MEASURED water values
         if use_formulas and product in PRODUCT_SPECIFICATIONS:
             spec = PRODUCT_SPECIFICATIONS[product]
             water_per_m3 = spec["water_per_m3_kg"]
@@ -708,14 +622,10 @@ def predict_production_energy(
             formula = spec["formula"]
         else:
             water_per_m3 = WATER_PER_M3_KG.get(product, 200.0)
-            water_per_plate = None
-            water_per_mm = None
-            num_plates = None
-            formula = None
+            water_per_plate = water_per_mm = num_plates = formula = None
         
         water_kg = volume_m3 * water_per_m3
         
-        # Calculate energy
         energy_from_volume = baseline_kwh_per_m3 * volume_m3 if baseline_kwh_per_m3 else None
         energy_from_water = baseline_kwh_per_kg * water_kg if baseline_kwh_per_kg else None
         
@@ -752,65 +662,36 @@ def predict_production_energy(
     return results
 
 
-# =====================================================================
-# PREDICTION HELPERS
-# =====================================================================
 def compute_product_wagon_stats(wagons: pd.DataFrame) -> dict:
     """Compute per-product wagon statistics."""
     logger.info("Computing wagon statistics by product...")
     df = wagons.copy()
 
-    # Compute residence time
     if "Entnahme" in df.columns and "t0" in df.columns:
-        df["residence_h"] = (
-            (df["Entnahme"] - df["t0"]).dt.total_seconds() / 3600
-        )
+        df["residence_h"] = (df["Entnahme"] - df["t0"]).dt.total_seconds() / 3600
     else:
         df["residence_h"] = np.nan
 
-    # Group by Product
-    stats = (
-        df.groupby("Produkt", as_index=False)
-        .agg(
-            avg_m3_per_wagon=("m3", "mean"),
-            avg_residence_h=("residence_h", "mean"),
-            wagon_count=("WG_Nr", "count"),
-        )
+    stats = df.groupby("Produkt", as_index=False).agg(
+        avg_m3_per_wagon=("m3", "mean"),
+        avg_residence_h=("residence_h", "mean"),
+        wagon_count=("WG_Nr", "count"),
     )
 
     stats["avg_residence_days"] = stats["avg_residence_h"] / 24.0
 
-    # Convert to dictionaries
-    wagon_capacity = stats.set_index("Produkt")["avg_m3_per_wagon"].to_dict()
-    residence_h = stats.set_index("Produkt")["avg_residence_h"].to_dict()
-    residence_days = stats.set_index("Produkt")["avg_residence_days"].to_dict()
-
-    logger.info(f"Computed stats for {len(stats)} products")
-    
     return {
-        "wagon_capacity_m3": wagon_capacity,
-        "residence_h": residence_h,
-        "residence_days": residence_days,
+        "wagon_capacity_m3": stats.set_index("Produkt")["avg_m3_per_wagon"].to_dict(),
+        "residence_h": stats.set_index("Produkt")["avg_residence_h"].to_dict(),
+        "residence_days": stats.set_index("Produkt")["avg_residence_days"].to_dict(),
         "raw_stats": stats,
     }
 
 
-# =====================================================================
-# MAIN
-# =====================================================================
 def main():
     """Standalone execution for testing."""
     logger.info("Module loaded successfully.")
-    logger.info(f"Using MEASURED values from Table 1")
-    logger.info(f"Suspension amount: {SUSPENSION_KG} kg")
-    logger.info(f"Products configured: {len(PRODUCT_SPECIFICATIONS)}")
-    
-    # Print all measured values
-    print("\n=== MEASURED Water Values (from Table 1) ===")
-    print(f"{'Product':<8} {'Formula':<20} {'Water/mm (g)':<15} {'Water/Plate (kg)':<18} {'Water/m³ (kg)'}")
-    print("-" * 85)
-    for prod, spec in PRODUCT_SPECIFICATIONS.items():
-        print(f"{prod:<8} {spec['formula']:<20} {spec['water_per_mm_g']:<15} {spec['water_per_plate_kg']:<18.2f} {spec['water_per_m3_kg']:.1f}")
+    logger.info(f"Using MEASURED values | Suspension: {SUSPENSION_KG} kg")
 
 
 if __name__ == "__main__":
