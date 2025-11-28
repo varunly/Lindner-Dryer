@@ -472,26 +472,39 @@ if st.session_state.analysis_complete and st.session_state.results:
                 "**Water/mm = (Slope × 330kg) + Intercept**, then **Total Water = Water/mm × Thickness**"
             )
             
-            # Show formulas
+            # Show formulas - extract from product specs
+            l_products = [p for p, s in PRODUCT_SPECIFICATIONS.items() if s.get("product_type") == "L"]
+            n_products = [p for p, s in PRODUCT_SPECIFICATIONS.items() if s.get("product_type") == "N"]
+            y_products = [p for p, s in PRODUCT_SPECIFICATIONS.items() if s.get("product_type") == "Y"]
+            
             col_f1, col_f2, col_f3 = st.columns(3)
-            with col_f1:
-                st.metric(
-                    "L-Type Formula",
-                    f"{WATER_FORMULAS['L']['water_per_mm_g']:.2f} g/mm",
-                    help=WATER_FORMULAS['L']['formula_text']
-                )
-            with col_f2:
-                st.metric(
-                    "N-Type Formula",
-                    f"{WATER_FORMULAS['N']['water_per_mm_g']:.2f} g/mm",
-                    help=WATER_FORMULAS['N']['formula_text']
-                )
-            with col_f3:
-                st.metric(
-                    "Y-Type Formula",
-                    f"{WATER_FORMULAS['Y']['water_per_mm_g']:.2f} g/mm",
-                    help=WATER_FORMULAS['Y']['formula_text']
-                )
+            
+            if l_products:
+                l_spec = PRODUCT_SPECIFICATIONS[l_products[0]]
+                with col_f1:
+                    st.metric(
+                        "L-Type Formula",
+                        f"{l_spec['water_per_mm_g']:.2f} g/mm",
+                        help=l_spec.get('formula', 'L-type water formula')
+                    )
+            
+            if n_products:
+                n_spec = PRODUCT_SPECIFICATIONS[n_products[0]]
+                with col_f2:
+                    st.metric(
+                        "N-Type Formula",
+                        f"{n_spec['water_per_mm_g']:.2f} g/mm",
+                        help=n_spec.get('formula', 'N-type water formula')
+                    )
+            
+            if y_products:
+                y_spec = PRODUCT_SPECIFICATIONS[y_products[0]]
+                with col_f3:
+                    st.metric(
+                        "Y-Type Formula",
+                        f"{y_spec['water_per_mm_g']:.2f} g/mm",
+                        help=y_spec.get('formula', 'Y-type water formula')
+                    )
             
             specs_data = []
             for prod, spec in PRODUCT_SPECIFICATIONS.items():
@@ -849,7 +862,11 @@ if st.session_state.analysis_complete and st.session_state.results:
                         st.dataframe(display_df, use_container_width=True)
                     
                     # Show calculation method
-                    with st.expander("🔍 How is this calculated?"):
+                    # Get example values from product specs
+                        l_water_mm = PRODUCT_SPECIFICATIONS.get('L36', {}).get('water_per_mm_g', 86.55)
+                        n_water_mm = PRODUCT_SPECIFICATIONS.get('N40', {}).get('water_per_mm_g', 90.89)
+                        y_water_mm = PRODUCT_SPECIFICATIONS.get('Y44', {}).get('water_per_mm_g', 147.2)
+                        
                         st.write(f"""
                         **Calculation Method:**
                         
@@ -857,9 +874,9 @@ if st.session_state.analysis_complete and st.session_state.results:
                            - Wagons × Average wagon capacity = Total volume (m³)
                            
                         2. **Water Calculation (Suspension-Based Formula):**
-                           - L-type: Water/mm = (-0.045 × 330kg) + 101.4 = {WATER_FORMULAS['L']['water_per_mm_g']:.2f} g/mm
-                           - N-type: Water/mm = (-0.057 × 330kg) + 109.7 = {WATER_FORMULAS['N']['water_per_mm_g']:.2f} g/mm
-                           - Y-type: Water/mm = (-0.160 × 330kg) + 200.0 = {WATER_FORMULAS['Y']['water_per_mm_g']:.2f} g/mm
+                           - L-type: Water/mm = (-0.045 × 330kg) + 101.4 = {l_water_mm:.2f} g/mm
+                           - N-type: Water/mm = (-0.057 × 330kg) + 109.7 = {n_water_mm:.2f} g/mm
+                           - Y-type: Water/mm = (-0.160 × 330kg) + 200.0 = {y_water_mm:.2f} g/mm
                            - Total water per plate = (Water/mm × Pressed thickness) / 1000
                            
                         3. **Energy Prediction:**
@@ -899,4 +916,5 @@ if st.session_state.analysis_complete and st.session_state.results:
         st.error(f"❌ Error displaying results: {display_error}")
         with st.expander("🔍 View Error Details"):
             st.exception(display_error)
+
 
