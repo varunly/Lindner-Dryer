@@ -622,7 +622,7 @@ if st.session_state.analysis_complete and st.session_state.results:
                     st.plotly_chart(fig_curves, use_container_width=True)
                     st.info("⭐ **Star markers** = MEASURED values from production data")
 
-           # ===== 5. MONTHLY & WEEKLY TRENDS (COMPREHENSIVE) =====
+           # ===== 5. MONTHLY & WEEKLY TRENDS (FIXED) =====
                     st.markdown('<div class="section-header">📊 Monthly & Weekly KPI Trends</div>', unsafe_allow_html=True)
                     
                     # Prepare aggregated data for different views
@@ -663,18 +663,44 @@ if st.session_state.analysis_complete and st.session_state.results:
                     monthly_overall["kWh_thermal_per_m3"] = safe_divide(monthly_overall["Energy_thermal_kWh"], monthly_overall["Volume_m3"])
                     monthly_overall["Thermal_pct"] = safe_divide(monthly_overall["Energy_thermal_kWh"], monthly_overall["Energy_kWh"]) * 100
                     
-                    # 4. Weekly data (from energy data if available)
+                    # 4. Weekly data (from energy data if available) - FIXED
                     if "energy" in results and not results["energy"].empty:
                         energy_df = results["energy"].copy()
                         energy_df["Week"] = energy_df["E_start"].dt.isocalendar().week
                         energy_df["Year"] = energy_df["E_start"].dt.year
                         
-                        weekly_energy = energy_df.groupby(["Year", "Week"], as_index=False).agg({
-                            "E_thermal_total_kWh": "sum",
-                            "E_el_kWh": "sum",
-                        })
-                        weekly_energy["Total_kWh"] = weekly_energy["E_thermal_total_kWh"] + weekly_energy["E_el_kWh"]
-                        weekly_energy["Week_Label"] = weekly_energy["Year"].astype(str) + "-W" + weekly_energy["Week"].astype(str).str.zfill(2)
+                        # Check which columns exist and aggregate accordingly
+                        agg_dict = {}
+                        
+                        # Check for thermal total column
+                        if "E_thermal_total_kWh" in energy_df.columns:
+                            agg_dict["E_thermal_total_kWh"] = "sum"
+                        else:
+                            # If total doesn't exist, sum individual zone thermal columns
+                            thermal_cols = [col for col in energy_df.columns if col.startswith("E_thermal_") and col.endswith("_kWh")]
+                            for col in thermal_cols:
+                                agg_dict[col] = "sum"
+                        
+                        # Electrical column
+                        if "E_el_kWh" in energy_df.columns:
+                            agg_dict["E_el_kWh"] = "sum"
+                        
+                        if agg_dict:
+                            weekly_energy = energy_df.groupby(["Year", "Week"], as_index=False).agg(agg_dict)
+                            
+                            # Calculate total thermal if we have individual zone columns
+                            if "E_thermal_total_kWh" not in weekly_energy.columns:
+                                thermal_cols = [col for col in weekly_energy.columns if col.startswith("E_thermal_") and col.endswith("_kWh")]
+                                if thermal_cols:
+                                    weekly_energy["E_thermal_total_kWh"] = weekly_energy[thermal_cols].sum(axis=1)
+                                else:
+                                    weekly_energy["E_thermal_total_kWh"] = 0
+                            
+                            # Calculate total energy
+                            weekly_energy["Total_kWh"] = weekly_energy.get("E_thermal_total_kWh", 0) + weekly_energy.get("E_el_kWh", 0)
+                            weekly_energy["Week_Label"] = weekly_energy["Year"].astype(str) + "-W" + weekly_energy["Week"].astype(str).str.zfill(2)
+                        else:
+                            weekly_energy = None
                     else:
                         weekly_energy = None
                     
@@ -763,16 +789,21 @@ if st.session_state.analysis_complete and st.session_state.results:
                         with col_w1:
                             # Weekly total energy consumption
                             fig_weekly_total = go.Figure()
+                            
+                            # Use get() to safely access columns that might not exist
+                            thermal_data = weekly_energy.get("E_thermal_total_kWh", pd.Series(0, index=weekly_energy.index))
+                            electrical_data = weekly_energy.get("E_el_kWh", pd.Series(0, index=weekly_energy.index))
+                            
                             fig_weekly_total.add_trace(go.Bar(
                                 name='Thermal',
                                 x=weekly_energy["Week_Label"],
-                                y=weekly_energy["E_thermal_total_kWh"],
+                                y=thermal_data,
                                 marker_color='#FF6B6B'
                             ))
                             fig_weekly_total.add_trace(go.Bar(
                                 name='Electrical',
                                 x=weekly_energy["Week_Label"],
-                                y=weekly_energy["E_el_kWh"],
+                                y=electrical_data,
                                 marker_color='#4ECDC4'
                             ))
                             fig_weekly_total.update_layout(
@@ -809,13 +840,16 @@ if st.session_state.analysis_complete and st.session_state.results:
                         avg_weekly = weekly_energy["Total_kWh"].mean()
                         max_weekly = weekly_energy["Total_kWh"].max()
                         min_weekly = weekly_energy["Total_kWh"].min()
-                        max_week = weekly_energy.loc[weekly_energy["Total_kWh"].idxmax(), "Week_Label"]
                         
-                        st.info(
-                            f"📊 **Weekly Statistics:** Average = **{avg_weekly:,.0f} kWh/week** | "
-                            f"Peak week: **{max_week}** ({max_weekly:,.0f} kWh) | "
-                            f"Range: {min_weekly:,.0f} - {max_weekly:,.0f} kWh"
-                        )
+                        if not weekly_energy.empty and max_weekly > 0:
+                            max_week = weekly_energy.loc[weekly_energy["Total_kWh"].idxmax(), "Week_Label"]
+                            st.info(
+                                f"📊 **Weekly Statistics:** Average = **{avg_weekly:,.0f} kWh/week** | "
+                                f"Peak week: **{max_week}** ({max_weekly:,.0f} kWh) | "
+                                f"Range: {min_weekly:,.0f} - {max_weekly:,.0f} kWh"
+                            )
+                    else:
+                        st.info("📅 Weekly energy data not available for the selected period")
                     
                     # ========== SECTION 3: BY PRODUCT TRENDS ==========
                     st.subheader("🧱 Trends by Product")
@@ -1086,6 +1120,7 @@ if st.session_state.analysis_complete and st.session_state.results:
         st.error(f"❌ Display error: {e}")
         with st.expander("Details"):
             st.exception(e)
+
 
 
 
