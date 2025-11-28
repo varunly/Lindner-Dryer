@@ -12,19 +12,20 @@ import os
 # ---------------------------------------------------------
 try:
     from dryer_kpi_monthly_final import (
-    parse_energy,
-    parse_wagon,
-    explode_intervals,
-    allocate_energy,
-    add_water_kpis,
-    compute_product_wagon_stats,
-    predict_production_energy,
-    calculate_water_per_m3_formula,
-    get_product_water_curve,
-    WATER_PER_M3_KG,
-    PRODUCT_SPECIFICATIONS,
-    CONFIG,
-)
+        parse_energy,
+        parse_wagon,
+        explode_intervals,
+        allocate_energy,
+        add_water_kpis,
+        compute_product_wagon_stats,
+        predict_production_energy,
+        calculate_water_per_m3_formula,
+        get_product_water_curve,
+        WATER_PER_M3_KG,
+        PRODUCT_SPECIFICATIONS,
+        SUSPENSION_KG,
+        CONFIG,
+    )
 except ImportError as e:
     st.error(f"❌ Unable to import dryer_kpi_monthly_final module: {e}")
     st.stop()
@@ -91,8 +92,9 @@ st.markdown(
 )
 
 st.info(
-    "📊 Upload your **Energy** and **Hordenwagen** files. "
-    "Water-loss formulas are based on suspension amount (330kg) measurements."
+    f"📊 **Individual Product Formulas Active** (Table 1) | "
+    f"Suspension: {SUSPENSION_KG} kg | "
+    f"Each product has its own unique water evaporation formula"
 )
 
 # ---------------------------------------------------------
@@ -465,63 +467,54 @@ if st.session_state.analysis_complete and st.session_state.results:
                 st.dataframe(prod_agg, use_container_width=True)
 
             # ===== PRODUCT SPECIFICATIONS =====
-            st.markdown('<div class="section-header">📐 Product Specifications & Water-Loss Formulas</div>', unsafe_allow_html=True)
+            st.markdown('<div class="section-header">📐 Product Specifications & Water-Loss Formulas (Table 1)</div>', unsafe_allow_html=True)
             
             st.write(
-                "Each product type has a **suspension-based formula** for water evaporation: "
-                "**Water/mm = (Slope × 330kg) + Intercept**, then **Total Water = Water/mm × Thickness**"
+                f"Each product has an **individual formula** based on {SUSPENSION_KG}kg suspension: "
+                "**Water/mm = (Slope × {SUSPENSION_KG}) + Intercept**, then **Total Water = Water/mm × Thickness / 1000**"
             )
             
-            # Show formulas - extract from product specs
-            l_products = [p for p, s in PRODUCT_SPECIFICATIONS.items() if s.get("product_type") == "L"]
-            n_products = [p for p, s in PRODUCT_SPECIFICATIONS.items() if s.get("product_type") == "N"]
-            y_products = [p for p, s in PRODUCT_SPECIFICATIONS.items() if s.get("product_type") == "Y"]
-            
+            # Show sample formulas
             col_f1, col_f2, col_f3 = st.columns(3)
             
-            if l_products:
-                l_spec = PRODUCT_SPECIFICATIONS[l_products[0]]
-                with col_f1:
-                    st.metric(
-                        "L-Type Formula",
-                        f"{l_spec['water_per_mm_g']:.2f} g/mm",
-                        help=l_spec.get('formula', 'L-type water formula')
-                    )
+            with col_f1:
+                st.metric(
+                    "L36 Formula",
+                    f"{PRODUCT_SPECIFICATIONS['L36']['water_per_mm_g']:.2f} g/mm",
+                    help=f"{PRODUCT_SPECIFICATIONS['L36']['formula']} where x={SUSPENSION_KG}kg"
+                )
             
-            if n_products:
-                n_spec = PRODUCT_SPECIFICATIONS[n_products[0]]
-                with col_f2:
-                    st.metric(
-                        "N-Type Formula",
-                        f"{n_spec['water_per_mm_g']:.2f} g/mm",
-                        help=n_spec.get('formula', 'N-type water formula')
-                    )
+            with col_f2:
+                st.metric(
+                    "N40 Formula",
+                    f"{PRODUCT_SPECIFICATIONS['N40']['water_per_mm_g']:.2f} g/mm",
+                    help=f"{PRODUCT_SPECIFICATIONS['N40']['formula']} where x={SUSPENSION_KG}kg"
+                )
             
-            if y_products:
-                y_spec = PRODUCT_SPECIFICATIONS[y_products[0]]
-                with col_f3:
-                    st.metric(
-                        "Y-Type Formula",
-                        f"{y_spec['water_per_mm_g']:.2f} g/mm",
-                        help=y_spec.get('formula', 'Y-type water formula')
-                    )
+            with col_f3:
+                st.metric(
+                    "Y44 Formula",
+                    f"{PRODUCT_SPECIFICATIONS['Y44']['water_per_mm_g']:.2f} g/mm",
+                    help=f"{PRODUCT_SPECIFICATIONS['Y44']['formula']} where x={SUSPENSION_KG}kg"
+                )
             
             specs_data = []
             for prod, spec in PRODUCT_SPECIFICATIONS.items():
                 specs_data.append({
                     "Product": prod,
                     "Type": spec["product_type"],
+                    "Formula": spec["formula"],
                     "Pressed Thickness (mm)": spec["pressed_thickness_mm"],
                     "Water/mm (g)": spec["water_per_mm_g"],
                     "Water/Plate (kg)": spec["water_per_plate_kg"],
                     "Water/m³ (kg)": spec["water_per_m3_kg"],
-                    "Formula": spec["formula"],
                 })
             
             specs_df = pd.DataFrame(specs_data)
             
-            with st.expander("📊 View Complete Product Specifications"):
+            with st.expander("📊 View Complete Product Specifications (Table 1)"):
                 st.dataframe(specs_df, use_container_width=True)
+                st.caption(f"Note: x in all formulas represents suspension amount = {SUSPENSION_KG} kg")
             
             # Water curves
             st.subheader("Water Evaporation Curves by Product")
@@ -529,7 +522,7 @@ if st.session_state.analysis_complete and st.session_state.results:
             products_to_plot = st.multiselect(
                 "Select products to compare:",
                 list(PRODUCT_SPECIFICATIONS.keys()),
-                default=["L36", "N40", "Y44"],
+                default=["L36", "L38", "N40"],
                 key="curve_products"
             )
             
@@ -549,7 +542,7 @@ if st.session_state.analysis_complete and st.session_state.results:
                         y="Water_per_Plate_kg",
                         color="Product",
                         markers=True,
-                        title="Water Evaporation vs. Pressed Thickness (Suspension-Based Formula)",
+                        title="Water Evaporation vs. Pressed Thickness (Individual Product Formulas)",
                         labels={
                             "Pressed_Thickness_mm": "Pressed Thickness (mm)",
                             "Water_per_Plate_kg": "Water per Plate (kg)"
@@ -572,7 +565,7 @@ if st.session_state.analysis_complete and st.session_state.results:
                     fig_curves.update_layout(height=500, plot_bgcolor="white")
                     st.plotly_chart(fig_curves, use_container_width=True)
                     
-                    st.info("⭐ **Star markers** show actual product specifications. Lines show water evaporation across thickness range.")
+                    st.info("⭐ **Star markers** show actual product specifications. Each product has its own unique curve.")
 
             # ===== Monthly Trends =====
             st.markdown('<div class="section-header">📊 Monthly KPI Trends</div>', unsafe_allow_html=True)
@@ -839,6 +832,12 @@ if st.session_state.analysis_complete and st.session_state.results:
                         
                         product_breakdown = pd.DataFrame(detailed_pred["products"])
                         
+                        # Add formula info for display
+                        for idx, row in product_breakdown.iterrows():
+                            prod = row["product"]
+                            if prod in PRODUCT_SPECIFICATIONS:
+                                product_breakdown.loc[idx, "Formula"] = PRODUCT_SPECIFICATIONS[prod]["formula"]
+                        
                         # Rename columns for better display
                         display_df = product_breakdown.rename(columns={
                             "product": "Product",
@@ -847,37 +846,38 @@ if st.session_state.analysis_complete and st.session_state.results:
                             "water_kg": "Total Water (kg)",
                             "num_plates": "Plates",
                             "water_per_plate_kg": "Water/Plate (kg)",
-                            "energy_from_water_kwh": "Energy (kWh)"
+                            "energy_from_water_kwh": "Energy (kWh)",
+                            "Formula": "Formula Used"
                         })
                         
                         # Select and order columns
-                        cols_to_show = ["Product", "Volume (m³)", "Plates", "Water Density (kg/m³)", 
-                                       "Total Water (kg)", "Water/Plate (kg)"]
+                        cols_to_show = ["Product", "Formula Used", "Volume (m³)", "Plates", 
+                                       "Water Density (kg/m³)", "Total Water (kg)", "Water/Plate (kg)"]
                         
                         if "Energy (kWh)" in display_df.columns:
                             cols_to_show.append("Energy (kWh)")
                         
+                        # Filter to existing columns
+                        cols_to_show = [c for c in cols_to_show if c in display_df.columns]
                         display_df = display_df[cols_to_show]
                         
                         st.dataframe(display_df, use_container_width=True)
                     
                     # Show calculation method
-                    # Get example values from product specs
-                        l_water_mm = PRODUCT_SPECIFICATIONS.get('L36', {}).get('water_per_mm_g', 86.55)
-                        n_water_mm = PRODUCT_SPECIFICATIONS.get('N40', {}).get('water_per_mm_g', 90.89)
-                        y_water_mm = PRODUCT_SPECIFICATIONS.get('Y44', {}).get('water_per_mm_g', 147.2)
-                        
+                    with st.expander("🔍 How is this calculated?"):
                         st.write(f"""
-                        **Calculation Method:**
+                        **Calculation Method (Individual Product Formulas - Table 1):**
                         
                         1. **Volume Calculation:**
                            - Wagons × Average wagon capacity = Total volume (m³)
                            
-                        2. **Water Calculation (Suspension-Based Formula):**
-                           - L-type: Water/mm = (-0.045 × 330kg) + 101.4 = {l_water_mm:.2f} g/mm
-                           - N-type: Water/mm = (-0.057 × 330kg) + 109.7 = {n_water_mm:.2f} g/mm
-                           - Y-type: Water/mm = (-0.160 × 330kg) + 200.0 = {y_water_mm:.2f} g/mm
-                           - Total water per plate = (Water/mm × Pressed thickness) / 1000
+                        2. **Water Calculation (Product-Specific Formulas):**
+                           - Each product has its own formula where x = {SUSPENSION_KG} kg suspension
+                           - Example formulas:
+                             * L36: {PRODUCT_SPECIFICATIONS['L36']['formula']} → {PRODUCT_SPECIFICATIONS['L36']['water_per_mm_g']:.2f} g/mm
+                             * N40: {PRODUCT_SPECIFICATIONS['N40']['formula']} → {PRODUCT_SPECIFICATIONS['N40']['water_per_mm_g']:.2f} g/mm
+                             * Y44: {PRODUCT_SPECIFICATIONS['Y44']['formula']} → {PRODUCT_SPECIFICATIONS['Y44']['water_per_mm_g']:.2f} g/mm
+                           - Total water per plate = (water_per_mm × pressed_thickness) / 1000
                            
                         3. **Energy Prediction:**
                            - **Method used:** kWh/kg water (most accurate)
@@ -887,6 +887,10 @@ if st.session_state.analysis_complete and st.session_state.results:
                         4. **Baseline KPI Source:**
                            - {'Custom scenario values' if use_custom_kpis else '**Automatically calculated from your historical data**'}
                            - Based on actual performance from uploaded files
+                           
+                        5. **Formula Accuracy:**
+                           - Using individual product formulas (Table 1) for maximum accuracy
+                           - Each product type has unique water evaporation characteristics
                         """)
                         
                         if use_custom_kpis:
@@ -895,7 +899,7 @@ if st.session_state.analysis_complete and st.session_state.results:
                                 "Disable 'Use custom KPIs' to use actual historical performance."
                             )
                     
-                    st.success("✅ Weekly energy prediction completed using historical baseline KPIs!")
+                    st.success("✅ Weekly energy prediction completed using individual product formulas!")
                 else:
                     st.warning("⚠️ Please enter wagon counts for at least one product.")
 
@@ -910,11 +914,9 @@ if st.session_state.analysis_complete and st.session_state.results:
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
 
-            st.success("✅ Analysis complete! Explore the visualizations above or download the full report.")
+            st.success("✅ Analysis complete! Individual product formulas (Table 1) active for all calculations.")
 
     except Exception as display_error:
         st.error(f"❌ Error displaying results: {display_error}")
         with st.expander("🔍 View Error Details"):
             st.exception(display_error)
-
-
