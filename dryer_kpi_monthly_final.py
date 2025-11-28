@@ -1,6 +1,6 @@
 """
 Lindner Dryer KPI Calculation Module
-FIXED: Correct Thermal and Electrical Energy Allocation
+FIXED: Correct Thermal/Electrical Energy Ratio
 """
 
 import pandas as pd
@@ -8,18 +8,12 @@ import numpy as np
 import logging
 from typing import List, Tuple, Dict
 
-# ---------------------------------------------------------
-# Logging
-# ---------------------------------------------------------
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------
-# CONFIG
-# ---------------------------------------------------------
 CONFIG = {
     "energy_sheet": 0,
     "wagon_sheet": "Hordenwagenverfolgung",
@@ -29,9 +23,6 @@ CONFIG = {
     "num_thermal_zones": 4,
 }
 
-# ---------------------------------------------------------
-# Zone energy mapping
-# ---------------------------------------------------------
 ZONE_ENERGY_MAPPING = {
     "Z2": "Zone 2",
     "Z3": "Zone 3",
@@ -41,9 +32,6 @@ ZONE_ENERGY_MAPPING = {
 
 SUSPENSION_KG = 330
 
-# ---------------------------------------------------------
-# PRODUCT SPECIFICATIONS (MEASURED VALUES)
-# ---------------------------------------------------------
 PRODUCT_SPECIFICATIONS = {
     "L28": {
         "product_type": "L",
@@ -187,7 +175,6 @@ PRODUCT_SPECIFICATIONS = {
     },
 }
 
-# Calculate water_per_m3_kg
 for product, spec in PRODUCT_SPECIFICATIONS.items():
     spec["water_per_m3_kg"] = spec["water_per_plate_kg"] / spec["volume_m3"]
 
@@ -197,11 +184,7 @@ WATER_PER_M3_KG = {
 }
 
 
-# =====================================================================
-# Duration parsing helper
-# =====================================================================
 def parse_duration_series(s: pd.Series) -> pd.Series:
-    """Convert 'Zeit in Zx' text to Timedelta."""
     s = s.astype(str).str.strip()
     s = s.str.replace(",", ".", regex=False)
     s = s.str.replace(r"\bh\b", "hours", regex=True)
@@ -216,11 +199,8 @@ def parse_duration_series(s: pd.Series) -> pd.Series:
     return td
 
 
-# =====================================================================
-# ENERGY PARSING
-# =====================================================================
 def parse_energy(df: pd.DataFrame) -> pd.DataFrame:
-    """Parse hourly energy consumption."""
+    """Parse hourly energy with CORRECT thermal/electrical tracking."""
     logger.info("Parsing energy data...")
     df = df.copy()
 
@@ -230,7 +210,7 @@ def parse_energy(df: pd.DataFrame) -> pd.DataFrame:
     df["Month"] = df["Zeitstempel"].dt.month
     df["Year"] = df["Zeitstempel"].dt.year
 
-    # Thermal energy per zone (Gas × 11.5)
+    # Calculate thermal energy per zone
     total_thermal = 0
     for z_key, z_name in ZONE_ENERGY_MAPPING.items():
         gas_col = f"Gasmenge, {z_name} [m³]"
@@ -241,11 +221,12 @@ def parse_energy(df: pd.DataFrame) -> pd.DataFrame:
             df[thermal_col] = gas_values * CONFIG["gas_to_kwh"]
             zone_total = df[thermal_col].sum()
             total_thermal += zone_total
-            logger.info(f"  {z_key}: {gas_values.sum():,.0f} m³ → {zone_total:,.0f} kWh thermal")
+            logger.info(f"  {z_key}: {gas_values.sum():,.0f} m³ gas → {zone_total:,.0f} kWh thermal")
         else:
             df[thermal_col] = 0.0
+            logger.warning(f"  {z_key}: Gas column not found")
 
-    # Electrical energy (total for dryer)
+    # Electrical energy
     if "Energieverbrauch, elektr. [kWh]" in df.columns:
         df["E_el_kWh"] = pd.to_numeric(
             df["Energieverbrauch, elektr. [kWh]"], errors='coerce'
@@ -255,24 +236,23 @@ def parse_energy(df: pd.DataFrame) -> pd.DataFrame:
     else:
         df["E_el_kWh"] = 0.0
         total_electrical = 0
+        logger.warning("  Electrical column not found")
 
-    # Log ratio
-    if total_electrical > 0:
+    # Log expected ratio
+    if total_electrical > 0 and total_thermal > 0:
         ratio = total_thermal / total_electrical
-        logger.info(f"  Thermal/Electrical ratio: {ratio:.1f}x (expected: 5-10x)")
-
+        logger.info(f"  ✓ Raw data ratio: Thermal/Electrical = {ratio:.1f}x")
+        if ratio < 3:
+            logger.warning(f"  ⚠ Ratio seems low. Expected 5-10x for dryer operations.")
+    
     df["E_start"] = df["Zeitstempel"]
     df["E_end"] = df["Zeitstempel"] + pd.Timedelta(hours=1)
 
-    logger.info(f"Parsed {len(df)} energy records")
+    logger.info(f"Parsed {len(df)} energy records | Total Thermal: {total_thermal:,.0f} kWh | Total Electrical: {total_electrical:,.0f} kWh")
     return df
 
 
-# =====================================================================
-# WAGON PARSING
-# =====================================================================
 def parse_wagon(df: pd.DataFrame) -> pd.DataFrame:
-    """Parse wagon tracking data."""
     logger.info("Parsing wagon data...")
     df = df.copy()
 
@@ -345,11 +325,7 @@ def parse_wagon(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-# =====================================================================
-# BUILD ZONE INTERVALS
-# =====================================================================
 def build_intervals(row: pd.Series) -> List[Tuple[str, pd.Timestamp, pd.Timestamp]]:
-    """Create (zone, start, end) list for each wagon row."""
     intervals = []
     prev_end = None
 
@@ -371,7 +347,6 @@ def build_intervals(row: pd.Series) -> List[Tuple[str, pd.Timestamp, pd.Timestam
 
 
 def explode_intervals(df: pd.DataFrame) -> pd.DataFrame:
-    """Explode wagons into one row per zone interval."""
     logger.info("Exploding wagon data into zone intervals...")
     rows = []
     for _, r in df.iterrows():
@@ -392,39 +367,35 @@ def explode_intervals(df: pd.DataFrame) -> pd.DataFrame:
     return result
 
 
-# =====================================================================
-# ENERGY ALLOCATION (FIXED - CORRECT THERMAL/ELECTRICAL RATIO)
-# =====================================================================
 def allocate_energy(e: pd.DataFrame, ivals: pd.DataFrame) -> pd.DataFrame:
     """
-    Allocate energy to products based on time overlap.
+    FIXED: Allocate energy correctly preserving thermal/electrical ratio.
     
-    THERMAL: Allocated per zone based on gas consumption
-    ELECTRICAL: Allocated proportionally based on volume share (not time!)
-    
-    This ensures the thermal/electrical ratio remains correct (5-10x).
+    The key insight: We should NOT multiply electrical by overlap.
+    Instead, we distribute the HOURLY electrical proportionally.
     """
-    logger.info("Allocating energy to products...")
+    logger.info("Allocating energy to products (FIXED allocation)...")
+    
+    # First, get total electrical per hour for later distribution
+    e_hourly = e.groupby("E_start").agg({
+        "E_el_kWh": "first"  # Electrical is same for all zones in an hour
+    }).reset_index()
+    
     results = []
-    
-    # First pass: Calculate total volume per hour across all zones
-    # This will be used for electrical allocation
-    
+
     for z_key, z_name in ZONE_ENERGY_MAPPING.items():
         thermal_col = f"E_thermal_{z_name}_kWh"
 
         if thermal_col not in e.columns:
-            logger.warning(f"Thermal energy column {thermal_col} not found")
             continue
 
         e_zone = e[e[thermal_col] > 0].copy()
         iv_zone = ivals[ivals["Zone"] == z_key].copy()
 
         if e_zone.empty or iv_zone.empty:
-            logger.warning(f"No data for {z_key}")
             continue
 
-        logger.info(f"Processing {z_key}: {len(e_zone)} energy hours × {len(iv_zone)} intervals")
+        logger.info(f"Processing {z_key}: {len(e_zone)} hours × {len(iv_zone)} intervals")
 
         chunk = 1000
         zone_res = []
@@ -434,14 +405,13 @@ def allocate_energy(e: pd.DataFrame, ivals: pd.DataFrame) -> pd.DataFrame:
             
             e_temp = e_zone.copy()
             e_temp["_key"] = 1
-            
             p_temp = part.copy()
             p_temp["_key"] = 1
 
             merged = e_temp.merge(p_temp, on="_key", suffixes=("_e", "_p"))
             merged.drop("_key", axis=1, inplace=True)
 
-            # Filter overlapping intervals
+            # Filter overlapping
             merged = merged[
                 (merged["P_end"] > merged["E_start"]) &
                 (merged["P_start"] < merged["E_end"])
@@ -450,7 +420,7 @@ def allocate_energy(e: pd.DataFrame, ivals: pd.DataFrame) -> pd.DataFrame:
             if merged.empty:
                 continue
 
-            # Calculate overlap
+            # Overlap calculation
             merged["latest_start"] = merged[["E_start", "P_start"]].max(axis=1)
             merged["earliest_end"] = merged[["E_end", "P_end"]].min(axis=1)
             
@@ -464,27 +434,27 @@ def allocate_energy(e: pd.DataFrame, ivals: pd.DataFrame) -> pd.DataFrame:
             if merged.empty:
                 continue
 
-            # Calculate share based on overlap time
-            merged["E_hour_id"] = merged["E_start"].astype(str)
-            total_overlap = merged.groupby("E_hour_id")["Overlap_h"].transform("sum")
-            merged["Share"] = merged["Overlap_h"] / total_overlap.replace(0, 1)
+            # Calculate proportional share per hour
+            merged["E_hour_key"] = merged["E_start"].astype(str)
             
-            # ✅ THERMAL: Zone energy × share (this is correct)
-            merged["Energy_thermal_kWh"] = merged[thermal_col] * merged["Share"]
+            # Sum of overlaps per hour (for normalization)
+            hour_total_overlap = merged.groupby("E_hour_key")["Overlap_h"].transform("sum")
             
-            # ✅ ELECTRICAL: Distribute based on VOLUME share, not time
-            # First, calculate volume-based share per hour
-            merged["Volume_overlap"] = merged["m3"] * merged["Overlap_h"]
-            total_volume_overlap = merged.groupby("E_hour_id")["Volume_overlap"].transform("sum")
-            merged["Volume_share"] = merged["Volume_overlap"] / total_volume_overlap.replace(0, 1)
+            # Each product's share of this hour
+            merged["Hour_share"] = merged["Overlap_h"] / hour_total_overlap.replace(0, 1)
             
-            # Electrical per zone = Total electrical / 4 zones
-            # Then distribute by volume share
-            merged["Energy_electrical_kWh"] = (merged["E_el_kWh"] / CONFIG["num_thermal_zones"]) * merged["Volume_share"]
+            # ✅ THERMAL: Zone thermal × share (correct)
+            merged["Energy_thermal_kWh"] = merged[thermal_col] * merged["Hour_share"]
             
-            merged.drop(["E_hour_id", "Volume_overlap", "Volume_share"], axis=1, inplace=True)
+            # ✅ ELECTRICAL: Distribute hourly electrical across ALL zones and products
+            # Step 1: Electrical per zone = Total / 4 zones
+            # Step 2: Distribute to products by their share
+            electrical_per_zone_hour = merged["E_el_kWh"] / CONFIG["num_thermal_zones"]
+            merged["Energy_electrical_kWh"] = electrical_per_zone_hour * merged["Hour_share"]
+            
+            merged.drop("E_hour_key", axis=1, inplace=True)
 
-            # Month detection
+            # Month handling
             if "Month_e" in merged.columns:
                 month_col = "Month_e"
             elif "Month_p" in merged.columns:
@@ -494,10 +464,9 @@ def allocate_energy(e: pd.DataFrame, ivals: pd.DataFrame) -> pd.DataFrame:
                 month_col = "Month"
 
             result = merged[[
-                month_col, "Produkt", "m3", "Overlap_h", "Share",
+                month_col, "Produkt", "m3", "Overlap_h", "Hour_share",
                 "Energy_thermal_kWh", "Energy_electrical_kWh"
             ]].copy()
-
             result = result.rename(columns={month_col: "Month"})
             result["Zone"] = z_key
 
@@ -508,44 +477,38 @@ def allocate_energy(e: pd.DataFrame, ivals: pd.DataFrame) -> pd.DataFrame:
 
     if results:
         final = pd.concat(results, ignore_index=True)
-        
         final["Energy_share_kWh"] = final["Energy_thermal_kWh"] + final["Energy_electrical_kWh"]
         
+        # Remove invalid
         final = final[
             (final["Energy_thermal_kWh"] >= 0) &
             (final["Energy_electrical_kWh"] >= 0) &
-            (final["Energy_share_kWh"] >= 0) &
             (final["m3"] > 0)
         ].copy()
         
-        # Log the allocation results
-        total_thermal = final["Energy_thermal_kWh"].sum()
-        total_electrical = final["Energy_electrical_kWh"].sum()
-        if total_electrical > 0:
-            ratio = total_thermal / total_electrical
-            logger.info(f"Allocation result - Thermal: {total_thermal:,.0f} kWh, Electrical: {total_electrical:,.0f} kWh, Ratio: {ratio:.1f}x")
+        # Verify ratio
+        total_th = final["Energy_thermal_kWh"].sum()
+        total_el = final["Energy_electrical_kWh"].sum()
         
-        logger.info(f"Allocated {len(final)} energy records")
+        if total_el > 0:
+            ratio = total_th / total_el
+            pct_el = (total_el / (total_th + total_el)) * 100
+            logger.info(f"✓ Allocated: Thermal={total_th:,.0f} kWh, Electrical={total_el:,.0f} kWh")
+            logger.info(f"✓ Ratio: {ratio:.1f}x | Electrical: {pct_el:.1f}%")
+        
+        logger.info(f"Allocated {len(final)} records")
         return final
     
-    logger.warning("No energy could be allocated")
     return pd.DataFrame(columns=[
         "Month", "Produkt", "Zone", "Energy_thermal_kWh", 
-        "Energy_electrical_kWh", "Energy_share_kWh", "Overlap_h", "Share", "m3"
+        "Energy_electrical_kWh", "Energy_share_kWh", "Overlap_h", "Hour_share", "m3"
     ])
 
 
-# =====================================================================
-# ADD WATER KPIs
-# =====================================================================
 def add_water_kpis(df: pd.DataFrame) -> pd.DataFrame:
-    """Add Water_kg and kWh_per_kg using measured values."""
     df = df.copy()
-
     df["water_per_m3_bench"] = df["Produkt"].map(WATER_PER_M3_KG)
-    avg_water = pd.Series(WATER_PER_M3_KG).mean()
-    df["water_per_m3_bench"] = df["water_per_m3_bench"].fillna(avg_water)
-    
+    df["water_per_m3_bench"] = df["water_per_m3_bench"].fillna(pd.Series(WATER_PER_M3_KG).mean())
     df["Water_kg"] = df["Volume_m3"] * df["water_per_m3_bench"]
     
     df["kWh_thermal_per_m3"] = np.where(df["Volume_m3"] > 0, df["Energy_thermal_kWh"] / df["Volume_m3"], 0)
@@ -556,13 +519,9 @@ def add_water_kpis(df: pd.DataFrame) -> pd.DataFrame:
     for col in ["kWh_thermal_per_m3", "kWh_per_m3", "kWh_thermal_per_kg", "kWh_per_kg"]:
         if col in df.columns:
             df[col] = df[col].clip(lower=0)
-    
     return df
 
 
-# =====================================================================
-# WATER CALCULATION FUNCTIONS
-# =====================================================================
 def calculate_water_per_plate(product: str, pressed_thickness_mm: float = None) -> float:
     if product not in PRODUCT_SPECIFICATIONS:
         return 0.0
@@ -626,8 +585,6 @@ def predict_production_energy(
             water_per_plate = water_per_mm = num_plates = formula = None
         
         water_kg = volume_m3 * water_per_m3
-        
-        energy_from_volume = baseline_kwh_per_m3 * volume_m3 if baseline_kwh_per_m3 else None
         energy_from_water = baseline_kwh_per_kg * water_kg if baseline_kwh_per_kg else None
         
         product_result = {
@@ -641,8 +598,6 @@ def predict_production_energy(
             "formula": formula,
         }
         
-        if energy_from_volume:
-            product_result["energy_from_volume_kwh"] = energy_from_volume
         if energy_from_water:
             product_result["energy_from_water_kwh"] = energy_from_water
         
@@ -652,8 +607,6 @@ def predict_production_energy(
         
         if energy_from_water:
             results["total_energy_kwh"] += energy_from_water
-        elif energy_from_volume:
-            results["total_energy_kwh"] += energy_from_volume
     
     results["mean_water_per_m3"] = (
         results["total_water_kg"] / results["total_volume_m3"]
@@ -664,7 +617,7 @@ def predict_production_energy(
 
 
 def compute_product_wagon_stats(wagons: pd.DataFrame) -> dict:
-    logger.info("Computing wagon statistics by product...")
+    logger.info("Computing wagon statistics...")
     df = wagons.copy()
 
     if "Entnahme" in df.columns and "t0" in df.columns:
@@ -677,7 +630,6 @@ def compute_product_wagon_stats(wagons: pd.DataFrame) -> dict:
         avg_residence_h=("residence_h", "mean"),
         wagon_count=("WG_Nr", "count"),
     )
-
     stats["avg_residence_days"] = stats["avg_residence_h"] / 24.0
 
     return {
@@ -689,8 +641,7 @@ def compute_product_wagon_stats(wagons: pd.DataFrame) -> dict:
 
 
 def main():
-    logger.info("Module loaded successfully.")
-
+    logger.info("Module loaded.")
 
 if __name__ == "__main__":
     main()
