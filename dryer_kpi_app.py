@@ -556,76 +556,123 @@ if st.session_state.analysis_complete and st.session_state.results:
                 fig_monthly_volume.update_layout(height=350, plot_bgcolor="white", showlegend=False)
                 st.plotly_chart(fig_monthly_volume, use_container_width=True)
             
-            # ========== SECTION 2: WEEKLY ENERGY CONSUMPTION ==========
-            if weekly_energy is not None and not weekly_energy.empty:
-                st.subheader("📅 Weekly Energy Consumption")
-                
-                col_w1, col_w2 = st.columns(2)
-                
-                with col_w1:
-                    # Weekly total energy consumption
-                    fig_weekly_total = go.Figure()
+            # ========== SECTION 2: WEEKLY ENERGY CONSUMPTION (FIXED) ==========
+                if weekly_energy is not None and not weekly_energy.empty:
+                    st.subheader("📅 Weekly Energy Consumption")
                     
-                    # Use get() to safely access columns that might not exist
-                    thermal_data = weekly_energy.get("E_thermal_total_kWh", pd.Series(0, index=weekly_energy.index))
-                    electrical_data = weekly_energy.get("E_el_kWh", pd.Series(0, index=weekly_energy.index))
+                    # Ensure no negative values - clip to 0
+                    if "E_thermal_total_kWh" in weekly_energy.columns:
+                        weekly_energy["E_thermal_total_kWh"] = weekly_energy["E_thermal_total_kWh"].clip(lower=0)
+                    if "E_el_kWh" in weekly_energy.columns:
+                        weekly_energy["E_el_kWh"] = weekly_energy["E_el_kWh"].clip(lower=0)
+                    weekly_energy["Total_kWh"] = weekly_energy["Total_kWh"].clip(lower=0)
                     
-                    fig_weekly_total.add_trace(go.Bar(
-                        name='Thermal',
-                        x=weekly_energy["Week_Label"],
-                        y=thermal_data,
-                        marker_color='#FF6B6B'
-                    ))
-                    fig_weekly_total.add_trace(go.Bar(
-                        name='Electrical',
-                        x=weekly_energy["Week_Label"],
-                        y=electrical_data,
-                        marker_color='#4ECDC4'
-                    ))
-                    fig_weekly_total.update_layout(
-                        title="Weekly Energy Consumption (kWh)",
-                        xaxis_title="Week",
-                        yaxis_title="Energy (kWh)",
-                        barmode='stack',
-                        height=350,
-                        plot_bgcolor="white",
-                        xaxis_tickangle=-45
-                    )
-                    st.plotly_chart(fig_weekly_total, use_container_width=True)
-                
-                with col_w2:
-                    # Weekly trend line
-                    fig_weekly_trend = px.line(
-                        weekly_energy,
-                        x="Week_Label",
-                        y="Total_kWh",
-                        markers=True,
-                        title="Weekly Total Energy Trend (kWh)",
-                        labels={"Total_kWh": "Total Energy (kWh)", "Week_Label": "Week"}
-                    )
-                    fig_weekly_trend.update_traces(line_color='#667eea', line_width=3, marker=dict(size=8))
-                    fig_weekly_trend.update_layout(
-                        height=350,
-                        plot_bgcolor="white",
-                        showlegend=False,
-                        xaxis_tickangle=-45
-                    )
-                    st.plotly_chart(fig_weekly_trend, use_container_width=True)
-                
-                # Weekly statistics
-                avg_weekly = weekly_energy["Total_kWh"].mean()
-                max_weekly = weekly_energy["Total_kWh"].max()
-                min_weekly = weekly_energy["Total_kWh"].min()
-                
-                if not weekly_energy.empty and max_weekly > 0:
-                    max_week = weekly_energy.loc[weekly_energy["Total_kWh"].idxmax(), "Week_Label"]
-                    st.info(
-                        f"📊 **Weekly Statistics:** Average = **{avg_weekly:,.0f} kWh/week** | "
-                        f"Peak week: **{max_week}** ({max_weekly:,.0f} kWh) | "
-                        f"Range: {min_weekly:,.0f} - {max_weekly:,.0f} kWh"
-                    )
-            else:
-                st.info("📅 Weekly energy data not available for the selected period")
+                    col_w1, col_w2 = st.columns(2)
+                    
+                    with col_w1:
+                        # Weekly total energy consumption
+                        fig_weekly_total = go.Figure()
+                        
+                        # Properly handle column access
+                        if "E_thermal_total_kWh" in weekly_energy.columns:
+                            thermal_data = weekly_energy["E_thermal_total_kWh"].fillna(0).clip(lower=0)
+                        else:
+                            thermal_data = pd.Series([0] * len(weekly_energy), index=weekly_energy.index)
+                        
+                        if "E_el_kWh" in weekly_energy.columns:
+                            electrical_data = weekly_energy["E_el_kWh"].fillna(0).clip(lower=0)
+                        else:
+                            electrical_data = pd.Series([0] * len(weekly_energy), index=weekly_energy.index)
+                        
+                        # Add traces only if there's actual data
+                        if thermal_data.sum() > 0:
+                            fig_weekly_total.add_trace(go.Bar(
+                                name='Thermal',
+                                x=weekly_energy["Week_Label"],
+                                y=thermal_data,
+                                marker_color='#FF6B6B',
+                                text=[f"{v:,.0f}" if v > 0 else "" for v in thermal_data],
+                                textposition='inside'
+                            ))
+                        
+                        if electrical_data.sum() > 0:
+                            fig_weekly_total.add_trace(go.Bar(
+                                name='Electrical',
+                                x=weekly_energy["Week_Label"],
+                                y=electrical_data,
+                                marker_color='#4ECDC4',
+                                text=[f"{v:,.0f}" if v > 0 else "" for v in electrical_data],
+                                textposition='inside'
+                            ))
+                        
+                        fig_weekly_total.update_layout(
+                            title="Weekly Energy Consumption (kWh)",
+                            xaxis_title="Week",
+                            yaxis_title="Energy (kWh)",
+                            barmode='stack',
+                            height=350,
+                            plot_bgcolor="white",
+                            xaxis_tickangle=-45,
+                            yaxis=dict(rangemode='tozero')  # Force y-axis to start at 0
+                        )
+                        st.plotly_chart(fig_weekly_total, use_container_width=True)
+                    
+                    with col_w2:
+                        # Weekly trend line
+                        total_data = weekly_energy["Total_kWh"].fillna(0).clip(lower=0)
+                        
+                        fig_weekly_trend = px.line(
+                            weekly_energy,
+                            x="Week_Label",
+                            y=total_data,
+                            markers=True,
+                            title="Weekly Total Energy Trend (kWh)",
+                            labels={"y": "Total Energy (kWh)", "Week_Label": "Week"}
+                        )
+                        fig_weekly_trend.update_traces(
+                            line_color='#667eea', 
+                            line_width=3, 
+                            marker=dict(size=8),
+                            text=[f"{v:,.0f}" for v in total_data],
+                            textposition="top center"
+                        )
+                        fig_weekly_trend.update_layout(
+                            height=350,
+                            plot_bgcolor="white",
+                            showlegend=False,
+                            xaxis_tickangle=-45,
+                            yaxis=dict(rangemode='tozero')  # Force y-axis to start at 0
+                        )
+                        st.plotly_chart(fig_weekly_trend, use_container_width=True)
+                    
+                    # Weekly statistics (with validation)
+                    valid_total = weekly_energy["Total_kWh"].clip(lower=0)
+                    avg_weekly = valid_total.mean()
+                    max_weekly = valid_total.max()
+                    min_weekly = valid_total.min()
+                    
+                    if not weekly_energy.empty and max_weekly > 0:
+                        max_week_idx = valid_total.idxmax()
+                        if pd.notna(max_week_idx):
+                            max_week = weekly_energy.loc[max_week_idx, "Week_Label"]
+                            st.info(
+                                f"📊 **Weekly Statistics:** Average = **{avg_weekly:,.0f} kWh/week** | "
+                                f"Peak week: **{max_week}** ({max_weekly:,.0f} kWh) | "
+                                f"Range: {min_weekly:,.0f} - {max_weekly:,.0f} kWh"
+                            )
+                        else:
+                            st.info("📊 **Weekly Statistics:** Data available but no valid maximum found")
+                    
+                    # Debug information (optional - remove in production)
+                    with st.expander("🔍 Debug: Check Weekly Data"):
+                        st.write("Columns available:", list(weekly_energy.columns))
+                        st.write("Data preview:")
+                        st.dataframe(weekly_energy.head())
+                        st.write(f"Thermal sum: {thermal_data.sum():,.0f}")
+                        st.write(f"Electrical sum: {electrical_data.sum():,.0f}")
+                        st.write(f"Total sum: {valid_total.sum():,.0f}")
+                else:
+                    st.info("📅 Weekly energy data not available for the selected period")
             
             # ========== SECTION 3: BY PRODUCT TRENDS ==========
             st.subheader("🧱 Trends by Product")
@@ -1095,6 +1142,7 @@ if st.session_state.analysis_complete and st.session_state.results:
         st.error(f"❌ Display error: {e}")
         with st.expander("Details"):
             st.exception(e)
+
 
 
 
