@@ -425,204 +425,7 @@ if st.session_state.analysis_complete and st.session_state.results:
                 "kWh_per_m3": "kWh/m³"
             })
             st.dataframe(zone_display, use_container_width=True, hide_index=True)
-
-            # ===== 3. PRODUCT PERFORMANCE (SIMPLIFIED) =====
-            if product_totals is not None and not product_totals.empty:
-                st.markdown('<div class="section-header">📊 Product Performance</div>', unsafe_allow_html=True)
-                
-                prod_agg = product_totals.groupby("Produkt", as_index=False).agg({
-                    "Energy_thermal_kWh": "sum",
-                    "Energy_electrical_kWh": "sum",
-                    "Energy_kWh": "sum",
-                    "Volume_m3": "sum",
-                    "Water_kg": "sum",
-                })
-                
-                prod_agg["kWh_per_m3"] = np.where(prod_agg["Volume_m3"] > 0, prod_agg["Energy_kWh"] / prod_agg["Volume_m3"], 0)
-                prod_agg["kWh_per_kg"] = np.where(prod_agg["Water_kg"] > 0, prod_agg["Energy_kWh"] / prod_agg["Water_kg"], 0)
-                prod_agg["kWh_thermal_per_m3"] = np.where(prod_agg["Volume_m3"] > 0, prod_agg["Energy_thermal_kWh"] / prod_agg["Volume_m3"], 0)
-                prod_agg["Thermal_pct"] = np.where(prod_agg["Energy_kWh"] > 0, (prod_agg["Energy_thermal_kWh"] / prod_agg["Energy_kWh"] * 100), 0)
-                prod_agg = prod_agg.fillna(0)
-                
-                col_p1, col_p2 = st.columns(2)
-                
-                with col_p1:
-                    # Total Energy by Product (Thermal + Electrical stacked)
-                    fig_prod_energy = go.Figure()
-                    fig_prod_energy.add_trace(go.Bar(
-                        name='Thermal (Gas)',
-                        x=prod_agg['Produkt'],
-                        y=prod_agg['Energy_thermal_kWh'],
-                        marker_color='#FF6B6B',
-                        text=[f"{v:,.0f}" for v in prod_agg['Energy_thermal_kWh']],
-                        textposition='auto'
-                    ))
-                    fig_prod_energy.add_trace(go.Bar(
-                        name='Electrical',
-                        x=prod_agg['Produkt'],
-                        y=prod_agg['Energy_electrical_kWh'],
-                        marker_color='#4ECDC4',
-                        text=[f"{v:,.0f}" for v in prod_agg['Energy_electrical_kWh']],
-                        textposition='auto'
-                    ))
-                    fig_prod_energy.update_layout(
-                        title="Total Energy Consumption by Product (kWh)",
-                        xaxis_title="Product",
-                        yaxis_title="Energy (kWh)",
-                        barmode='stack',
-                        height=400,
-                        plot_bgcolor="white"
-                    )
-                    st.plotly_chart(fig_prod_energy, use_container_width=True)
-                
-                with col_p2:
-                    # Thermal Energy Consumed by Each Product (Horizontal Bar Chart)
-                    prod_sorted = prod_agg.sort_values("Energy_thermal_kWh", ascending=True)
-                    
-                    fig_thermal = go.Figure()
-                    fig_thermal.add_trace(go.Bar(
-                        x=prod_sorted['Energy_thermal_kWh'],
-                        y=prod_sorted['Produkt'],
-                        orientation='h',
-                        marker=dict(
-                            color=prod_sorted['Energy_thermal_kWh'],
-                            colorscale='Reds',
-                            showscale=True,
-                            colorbar=dict(title="kWh")
-                        ),
-                        text=[f"{v:,.0f} kWh" for v in prod_sorted['Energy_thermal_kWh']],
-                        textposition='outside'
-                    ))
-                    fig_thermal.update_layout(
-                        title="Thermal Energy Consumption by Product (kWh)",
-                        xaxis_title="Thermal Energy (kWh)",
-                        yaxis_title="Product",
-                        height=400,
-                        plot_bgcolor="white",
-                        showlegend=False
-                    )
-                    st.plotly_chart(fig_thermal, use_container_width=True)
-                
-                # Thermal energy distribution pie chart (centered)
-                col_pie1, col_pie2, col_pie3 = st.columns([1, 2, 1])
-                
-                with col_pie2:
-                    fig_thermal_pie = px.pie(
-                        prod_agg,
-                        values="Energy_thermal_kWh",
-                        names="Produkt",
-                        title="Thermal Energy Distribution by Product (%)",
-                        color_discrete_sequence=px.colors.sequential.Reds_r
-                    )
-                    fig_thermal_pie.update_traces(textposition='inside', textinfo='percent+label')
-                    fig_thermal_pie.update_layout(height=400)
-                    st.plotly_chart(fig_thermal_pie, use_container_width=True)
-                
-                # Product summary table
-                st.subheader("Product Energy Summary")
-                prod_display = prod_agg.copy()
-                
-                prod_display = prod_display.rename(columns={
-                    "Produkt": "Product",
-                    "Energy_thermal_kWh": "Thermal (kWh)",
-                    "Energy_electrical_kWh": "Electrical (kWh)",
-                    "Energy_kWh": "Total (kWh)",
-                    "Thermal_pct": "Thermal %",
-                    "Volume_m3": "Volume (m³)",
-                    "Water_kg": "Water (kg)",
-                    "kWh_per_m3": "kWh/m³",
-                    "kWh_per_kg": "kWh/kg",
-                    "kWh_thermal_per_m3": "Thermal kWh/m³"
-                })
-                
-                # Select and order columns for display
-                display_cols = [
-                    "Product", "Thermal (kWh)", "Electrical (kWh)", "Total (kWh)", 
-                    "Thermal %", "Volume (m³)", "Water (kg)", "Thermal kWh/m³", "kWh/m³", "kWh/kg"
-                ]
-                display_cols = [c for c in display_cols if c in prod_display.columns]
-                
-                st.dataframe(prod_display[display_cols], use_container_width=True, hide_index=True)
-                
-                # Summary metrics for thermal energy
-                total_thermal_prod = prod_agg["Energy_thermal_kWh"].sum()
-                avg_thermal_per_product = prod_agg["Energy_thermal_kWh"].mean()
-                max_thermal_product = prod_agg.loc[prod_agg["Energy_thermal_kWh"].idxmax(), "Produkt"]
-                max_thermal_value = prod_agg["Energy_thermal_kWh"].max()
-                
-                st.info(
-                    f"🔥 **Thermal Energy Summary:** Total = **{total_thermal_prod:,.0f} kWh** | "
-                    f"Average per product = **{avg_thermal_per_product:,.0f} kWh** | "
-                    f"Highest consumer: **{max_thermal_product}** ({max_thermal_value:,.0f} kWh)"
-                )
-                
-
-            # ===== 4. PRODUCT SPECIFICATIONS (MEASURED VALUES) =====
-            st.markdown('<div class="section-header">📐 Product Specifications (MEASURED Values)</div>', unsafe_allow_html=True)
-            
-            st.write(f"**Formula:** Water/mm (g) = Slope × {SUSPENSION_KG}kg + Intercept | All values are **MEASURED** from production data")
-            
-            specs_data = []
-            for prod, spec in PRODUCT_SPECIFICATIONS.items():
-                specs_data.append({
-                    "Product": prod,
-                    "Type": spec["product_type"],
-                    "Formula": spec["formula"],
-                    "Thickness (mm)": spec["pressed_thickness_mm"],
-                    "Water/mm (g)": spec["water_per_mm_g"],
-                    "Water/Plate (kg)": spec["water_per_plate_kg"],
-                    "Water/m³ (kg)": round(spec["water_per_m3_kg"], 1),
-                })
-            
-            specs_df = pd.DataFrame(specs_data)
-            st.dataframe(specs_df, use_container_width=True, hide_index=True)
-            
-            # Water curves
-            st.subheader("Water Evaporation Curves by Product")
-            
-            products_to_plot = st.multiselect(
-                "Select products to compare:",
-                list(PRODUCT_SPECIFICATIONS.keys()),
-                default=["L36", "L38", "N40"],
-                key="curve_products"
-            )
-            
-            if products_to_plot:
-                all_curves = []
-                for prod in products_to_plot:
-                    curve_df = get_product_water_curve(prod)
-                    if curve_df is not None and not curve_df.empty:
-                        all_curves.append(curve_df)
-                
-                if all_curves:
-                    combined_curves = pd.concat(all_curves, ignore_index=True)
-                    
-                    fig_curves = px.line(
-                        combined_curves,
-                        x="Pressed_Thickness_mm",
-                        y="Water_per_Plate_kg",
-                        color="Product",
-                        markers=True,
-                        title="Water Evaporation vs. Pressed Thickness",
-                        labels={"Pressed_Thickness_mm": "Pressed Thickness (mm)", "Water_per_Plate_kg": "Water per Plate (kg)"}
-                    )
-                    
-                    for prod in products_to_plot:
-                        if prod in PRODUCT_SPECIFICATIONS:
-                            spec = PRODUCT_SPECIFICATIONS[prod]
-                            fig_curves.add_scatter(
-                                x=[spec["pressed_thickness_mm"]],
-                                y=[spec["water_per_plate_kg"]],
-                                mode='markers',
-                                marker=dict(size=14, symbol='star'),
-                                name=f"{prod} (measured)"
-                            )
-                    
-                    fig_curves.update_layout(height=450, plot_bgcolor="white")
-                    st.plotly_chart(fig_curves, use_container_width=True)
-                    st.info("⭐ **Star markers** = MEASURED values from production data")
-
-           # ===== 5. MONTHLY & WEEKLY TRENDS (FIXED) =====
+            # ===== 5. MONTHLY & WEEKLY TRENDS (FIXED) =====
                     st.markdown('<div class="section-header">📊 Monthly & Weekly KPI Trends</div>', unsafe_allow_html=True)
                     
                     # Prepare aggregated data for different views
@@ -941,6 +744,204 @@ if st.session_state.analysis_complete and st.session_state.results:
                         )
                         fig_zone_volume.update_layout(height=350, plot_bgcolor="white")
                         st.plotly_chart(fig_zone_volume, use_container_width=True)
+
+            # ===== 3. PRODUCT PERFORMANCE (SIMPLIFIED) =====
+            if product_totals is not None and not product_totals.empty:
+                st.markdown('<div class="section-header">📊 Product Performance</div>', unsafe_allow_html=True)
+                
+                prod_agg = product_totals.groupby("Produkt", as_index=False).agg({
+                    "Energy_thermal_kWh": "sum",
+                    "Energy_electrical_kWh": "sum",
+                    "Energy_kWh": "sum",
+                    "Volume_m3": "sum",
+                    "Water_kg": "sum",
+                })
+                
+                prod_agg["kWh_per_m3"] = np.where(prod_agg["Volume_m3"] > 0, prod_agg["Energy_kWh"] / prod_agg["Volume_m3"], 0)
+                prod_agg["kWh_per_kg"] = np.where(prod_agg["Water_kg"] > 0, prod_agg["Energy_kWh"] / prod_agg["Water_kg"], 0)
+                prod_agg["kWh_thermal_per_m3"] = np.where(prod_agg["Volume_m3"] > 0, prod_agg["Energy_thermal_kWh"] / prod_agg["Volume_m3"], 0)
+                prod_agg["Thermal_pct"] = np.where(prod_agg["Energy_kWh"] > 0, (prod_agg["Energy_thermal_kWh"] / prod_agg["Energy_kWh"] * 100), 0)
+                prod_agg = prod_agg.fillna(0)
+                
+                col_p1, col_p2 = st.columns(2)
+                
+                with col_p1:
+                    # Total Energy by Product (Thermal + Electrical stacked)
+                    fig_prod_energy = go.Figure()
+                    fig_prod_energy.add_trace(go.Bar(
+                        name='Thermal (Gas)',
+                        x=prod_agg['Produkt'],
+                        y=prod_agg['Energy_thermal_kWh'],
+                        marker_color='#FF6B6B',
+                        text=[f"{v:,.0f}" for v in prod_agg['Energy_thermal_kWh']],
+                        textposition='auto'
+                    ))
+                    fig_prod_energy.add_trace(go.Bar(
+                        name='Electrical',
+                        x=prod_agg['Produkt'],
+                        y=prod_agg['Energy_electrical_kWh'],
+                        marker_color='#4ECDC4',
+                        text=[f"{v:,.0f}" for v in prod_agg['Energy_electrical_kWh']],
+                        textposition='auto'
+                    ))
+                    fig_prod_energy.update_layout(
+                        title="Total Energy Consumption by Product (kWh)",
+                        xaxis_title="Product",
+                        yaxis_title="Energy (kWh)",
+                        barmode='stack',
+                        height=400,
+                        plot_bgcolor="white"
+                    )
+                    st.plotly_chart(fig_prod_energy, use_container_width=True)
+                
+                with col_p2:
+                    # Thermal Energy Consumed by Each Product (Horizontal Bar Chart)
+                    prod_sorted = prod_agg.sort_values("Energy_thermal_kWh", ascending=True)
+                    
+                    fig_thermal = go.Figure()
+                    fig_thermal.add_trace(go.Bar(
+                        x=prod_sorted['Energy_thermal_kWh'],
+                        y=prod_sorted['Produkt'],
+                        orientation='h',
+                        marker=dict(
+                            color=prod_sorted['Energy_thermal_kWh'],
+                            colorscale='Reds',
+                            showscale=True,
+                            colorbar=dict(title="kWh")
+                        ),
+                        text=[f"{v:,.0f} kWh" for v in prod_sorted['Energy_thermal_kWh']],
+                        textposition='outside'
+                    ))
+                    fig_thermal.update_layout(
+                        title="Thermal Energy Consumption by Product (kWh)",
+                        xaxis_title="Thermal Energy (kWh)",
+                        yaxis_title="Product",
+                        height=400,
+                        plot_bgcolor="white",
+                        showlegend=False
+                    )
+                    st.plotly_chart(fig_thermal, use_container_width=True)
+                
+                # Thermal energy distribution pie chart (centered)
+                col_pie1, col_pie2, col_pie3 = st.columns([1, 2, 1])
+                
+                with col_pie2:
+                    fig_thermal_pie = px.pie(
+                        prod_agg,
+                        values="Energy_thermal_kWh",
+                        names="Produkt",
+                        title="Thermal Energy Distribution by Product (%)",
+                        color_discrete_sequence=px.colors.sequential.Reds_r
+                    )
+                    fig_thermal_pie.update_traces(textposition='inside', textinfo='percent+label')
+                    fig_thermal_pie.update_layout(height=400)
+                    st.plotly_chart(fig_thermal_pie, use_container_width=True)
+                
+                # Product summary table
+                st.subheader("Product Energy Summary")
+                prod_display = prod_agg.copy()
+                
+                prod_display = prod_display.rename(columns={
+                    "Produkt": "Product",
+                    "Energy_thermal_kWh": "Thermal (kWh)",
+                    "Energy_electrical_kWh": "Electrical (kWh)",
+                    "Energy_kWh": "Total (kWh)",
+                    "Thermal_pct": "Thermal %",
+                    "Volume_m3": "Volume (m³)",
+                    "Water_kg": "Water (kg)",
+                    "kWh_per_m3": "kWh/m³",
+                    "kWh_per_kg": "kWh/kg",
+                    "kWh_thermal_per_m3": "Thermal kWh/m³"
+                })
+                
+                # Select and order columns for display
+                display_cols = [
+                    "Product", "Thermal (kWh)", "Electrical (kWh)", "Total (kWh)", 
+                    "Thermal %", "Volume (m³)", "Water (kg)", "Thermal kWh/m³", "kWh/m³", "kWh/kg"
+                ]
+                display_cols = [c for c in display_cols if c in prod_display.columns]
+                
+                st.dataframe(prod_display[display_cols], use_container_width=True, hide_index=True)
+                
+                # Summary metrics for thermal energy
+                total_thermal_prod = prod_agg["Energy_thermal_kWh"].sum()
+                avg_thermal_per_product = prod_agg["Energy_thermal_kWh"].mean()
+                max_thermal_product = prod_agg.loc[prod_agg["Energy_thermal_kWh"].idxmax(), "Produkt"]
+                max_thermal_value = prod_agg["Energy_thermal_kWh"].max()
+                
+                st.info(
+                    f"🔥 **Thermal Energy Summary:** Total = **{total_thermal_prod:,.0f} kWh** | "
+                    f"Average per product = **{avg_thermal_per_product:,.0f} kWh** | "
+                    f"Highest consumer: **{max_thermal_product}** ({max_thermal_value:,.0f} kWh)"
+                )
+                
+
+            # ===== 4. PRODUCT SPECIFICATIONS (MEASURED VALUES) =====
+            st.markdown('<div class="section-header">📐 Product Specifications (MEASURED Values)</div>', unsafe_allow_html=True)
+            
+            st.write(f"**Formula:** Water/mm (g) = Slope × {SUSPENSION_KG}kg + Intercept | All values are **MEASURED** from production data")
+            
+            specs_data = []
+            for prod, spec in PRODUCT_SPECIFICATIONS.items():
+                specs_data.append({
+                    "Product": prod,
+                    "Type": spec["product_type"],
+                    "Formula": spec["formula"],
+                    "Thickness (mm)": spec["pressed_thickness_mm"],
+                    "Water/mm (g)": spec["water_per_mm_g"],
+                    "Water/Plate (kg)": spec["water_per_plate_kg"],
+                    "Water/m³ (kg)": round(spec["water_per_m3_kg"], 1),
+                })
+            
+            specs_df = pd.DataFrame(specs_data)
+            st.dataframe(specs_df, use_container_width=True, hide_index=True)
+            
+            # Water curves
+            st.subheader("Water Evaporation Curves by Product")
+            
+            products_to_plot = st.multiselect(
+                "Select products to compare:",
+                list(PRODUCT_SPECIFICATIONS.keys()),
+                default=["L36", "L38", "N40"],
+                key="curve_products"
+            )
+            
+            if products_to_plot:
+                all_curves = []
+                for prod in products_to_plot:
+                    curve_df = get_product_water_curve(prod)
+                    if curve_df is not None and not curve_df.empty:
+                        all_curves.append(curve_df)
+                
+                if all_curves:
+                    combined_curves = pd.concat(all_curves, ignore_index=True)
+                    
+                    fig_curves = px.line(
+                        combined_curves,
+                        x="Pressed_Thickness_mm",
+                        y="Water_per_Plate_kg",
+                        color="Product",
+                        markers=True,
+                        title="Water Evaporation vs. Pressed Thickness",
+                        labels={"Pressed_Thickness_mm": "Pressed Thickness (mm)", "Water_per_Plate_kg": "Water per Plate (kg)"}
+                    )
+                    
+                    for prod in products_to_plot:
+                        if prod in PRODUCT_SPECIFICATIONS:
+                            spec = PRODUCT_SPECIFICATIONS[prod]
+                            fig_curves.add_scatter(
+                                x=[spec["pressed_thickness_mm"]],
+                                y=[spec["water_per_plate_kg"]],
+                                mode='markers',
+                                marker=dict(size=14, symbol='star'),
+                                name=f"{prod} (measured)"
+                            )
+                    
+                    fig_curves.update_layout(height=450, plot_bgcolor="white")
+                    st.plotly_chart(fig_curves, use_container_width=True)
+                    st.info("⭐ **Star markers** = MEASURED values from production data")
+
+           
             # ===== 6. DATA TABLES =====
             with st.expander("📋 View Detailed Data Tables"):
                 tab1, tab2, tab3 = st.tabs(["Monthly Summary", "Yearly Summary", "Product Totals"])
@@ -1093,6 +1094,7 @@ if st.session_state.analysis_complete and st.session_state.results:
         st.error(f"❌ Display error: {e}")
         with st.expander("Details"):
             st.exception(e)
+
 
 
 
