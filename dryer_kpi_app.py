@@ -83,9 +83,9 @@ st.markdown(
 )
 
 st.info(
-    f"📊 **Using MEASURED Values from Table 1** | "
+    f"📊 **Varun Solanki** | "
     f"Suspension: {SUSPENSION_KG} kg | "
-    f"Each product has measured water evaporation values"
+    f"Lindner Dryer KPI Calculation"
 )
 
 # ---------------------------------------------------------
@@ -747,4 +747,5 @@ if st.session_state.analysis_complete and st.session_state.results:
         st.error(f"❌ Display error: {e}")
         with st.expander("Details"):
             st.exception(e)
+
 
