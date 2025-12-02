@@ -380,24 +380,17 @@ if st.session_state.analysis_complete and st.session_state.results:
                 st.markdown(create_kpi_card("Total Energy", total_energy, "kWh"), unsafe_allow_html=True)
             
             # Row 2: Production & Water Metrics
-            st.subheader("🏭 Production & Water")
+            st.subheader("🏭 Production")
             c4, c5, c6 = st.columns(3)
             with c4:
-                st.markdown(create_kpi_card("Total Volume", total_volume, "m³"), unsafe_allow_html=True)
+                st.markdown(create_kpi_card("Total Volume of products", total_volume, "m³"), unsafe_allow_html=True)
             with c5:
-                st.markdown(create_kpi_card("Water Evaporated", total_water, "kg"), unsafe_allow_html=True)
+                st.markdown(create_kpi_card("Total Water Evaporated", total_water, "kg"), unsafe_allow_html=True)
             with c6:
                 water_per_m3 = safe_divide(total_water, total_volume)
                 st.markdown(create_kpi_card("Water/m³", water_per_m3, "kg/m³"), unsafe_allow_html=True)
             
-            # Row 3: Energy per Water Loss (Specific Energy)
-            st.subheader("💧 Energy per Water Evaporated")
-            c7, c8 = st.columns(2)
-            with c7:
-                st.markdown(create_kpi_card("Total kWh/kg water", avg_kwh_per_kg, "kWh/kg"), unsafe_allow_html=True)
-            with c8:
-                st.markdown(create_kpi_card("Thermal kWh/kg water", avg_kwh_thermal_per_kg, "kWh/kg"), unsafe_allow_html=True)
-            
+                        
             # Summary info box
             thermal_pct = (total_thermal / total_energy * 100) if total_energy > 0 else 0
             electrical_pct = (total_electrical / total_energy * 100) if total_energy > 0 else 0
@@ -1297,6 +1290,7 @@ if st.session_state.analysis_complete and st.session_state.results:
         st.error(f"❌ Display error: {e}")
         with st.expander("Details"):
             st.exception(e)
+
 
 
 
