@@ -614,7 +614,7 @@ if st.session_state.analysis_complete and st.session_state.results:
             
             
             # ===== VOLUME BREAKDOWN & VALIDATION =====
-            with st.expander("📊 Volume Breakdown & Validation"):
+                with st.expander("📊 Volume Breakdown & Validation"):
                 st.subheader("Volume Statistics")
                 
                 # Overall statistics
@@ -1499,6 +1499,7 @@ if st.session_state.analysis_complete and st.session_state.results:
         st.error(f"❌ Display error: {e}")
         with st.expander("Details"):
             st.exception(e)
+
 
 
 
