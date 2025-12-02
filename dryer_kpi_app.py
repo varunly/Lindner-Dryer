@@ -182,7 +182,22 @@ def run_analysis(energy_path: str, wagon_path: str, products_filter, month_filte
             w = w[w["Produkt"].astype(str).isin(products_filter)]
             if w.empty:
                 raise ValueError(f"No wagon records found for selected products: {products_filter}")
-
+        # ✅ ADD VOLUME VALIDATION HERE
+        total_volume_raw = w["m3"].sum()
+        total_wagons = len(w)
+        avg_volume_per_wagon = w["m3"].mean()
+        
+        status.text(f"📊 Total volume: {total_volume_raw:,.0f} m³ from {total_wagons:,} wagons")
+        
+        # Validate volume range
+        if total_volume_raw < 12000 or total_volume_raw > 15000:
+            st.warning(
+                f"⚠️ **Volume Check:** Total volume is {total_volume_raw:,.0f} m³. "
+                f"Expected range: 12,000-15,000 m³. "
+                f"This might indicate data quality issues or unusual production period."
+            )
+        else:
+            st.success(f"✅ **Volume Validated:** {total_volume_raw:,.0f} m³ (within expected range 12,000-15,000 m³)")
         if month_filter:
             e = e[e["Month"] == month_filter]
             w = w[w["Month"] == month_filter]
@@ -391,7 +406,92 @@ if st.session_state.analysis_complete and st.session_state.results:
                 f"Electrical = **{electrical_pct:.1f}%** ({total_electrical:,.0f} kWh) | "
                 f"💧 **Water:** {total_water:,.0f} kg ({water_tons:,.1f} tons) evaporated from {total_volume:,.0f} m³"
             )
-
+                        # After Summary KPIs section, add this:
+            
+            # ===== VOLUME BREAKDOWN & VALIDATION =====
+            with st.expander("📊 Volume Breakdown & Validation"):
+                st.subheader("Volume Statistics")
+                
+                # Overall statistics
+                col_v1, col_v2, col_v3, col_v4 = st.columns(4)
+                
+                total_wagons_filtered = len(results["wagons"])
+                total_volume_filtered = results["wagons"]["m3"].sum()
+                avg_volume_wagon = results["wagons"]["m3"].mean()
+                
+                with col_v1:
+                    st.metric("Total Wagons", f"{total_wagons_filtered:,}")
+                with col_v2:
+                    st.metric("Total Volume", f"{total_volume_filtered:,.0f} m³")
+                with col_v3:
+                    st.metric("Avg Volume/Wagon", f"{avg_volume_wagon:.2f} m³")
+                with col_v4:
+                    expected_range = "12,000-15,000 m³"
+                    in_range = 12000 <= total_volume_filtered <= 15000
+                    st.metric("Status", "✅ In Range" if in_range else "⚠️ Out of Range")
+                
+                # Volume by product
+                st.subheader("Volume by Product")
+                vol_by_product = results["wagons"].groupby("Produkt").agg({
+                    "m3": ["sum", "mean", "count"]
+                }).round(2)
+                vol_by_product.columns = ["Total (m³)", "Avg/Wagon (m³)", "Wagon Count"]
+                vol_by_product = vol_by_product.sort_values("Total (m³)", ascending=False)
+                
+                # Add percentage
+                vol_by_product["% of Total"] = (vol_by_product["Total (m³)"] / total_volume_filtered * 100).round(1)
+                
+                st.dataframe(vol_by_product, use_container_width=True)
+                
+                # Volume by month
+                st.subheader("Volume by Month")
+                vol_by_month = results["wagons"].groupby("Month").agg({
+                    "m3": "sum",
+                    "WG_Nr": "count"
+                }).round(0)
+                vol_by_month.columns = ["Volume (m³)", "Wagons"]
+                vol_by_month["Avg m³/Wagon"] = (vol_by_month["Volume (m³)"] / vol_by_month["Wagons"]).round(2)
+                
+                st.dataframe(vol_by_month, use_container_width=True)
+                
+                # Theoretical vs Actual comparison
+                st.subheader("Theoretical vs Actual Volume per Wagon")
+                
+                comparison_data = []
+                for prod in results["wagons"]["Produkt"].unique():
+                    if prod in PRODUCT_SPECIFICATIONS:
+                        spec = PRODUCT_SPECIFICATIONS[prod]
+                        
+                        # Theoretical volume
+                        edge_m = spec["edge_length_mm"] / 1000.0
+                        thick_m = spec["final_thickness_mm"] / 1000.0
+                        vol_theoretical = 234 * edge_m * edge_m * thick_m
+                        
+                        # Actual volume
+                        actual_vols = results["wagons"][results["wagons"]["Produkt"] == prod]["m3"]
+                        vol_actual = actual_vols.mean()
+                        
+                        difference = vol_actual - vol_theoretical
+                        diff_pct = (difference / vol_theoretical * 100) if vol_theoretical > 0 else 0
+                        
+                        comparison_data.append({
+                            "Product": prod,
+                            "Theoretical (m³)": round(vol_theoretical, 3),
+                            "Actual (m³)": round(vol_actual, 3),
+                            "Difference (m³)": round(difference, 3),
+                            "Difference (%)": round(diff_pct, 1),
+                            "Wagons": len(actual_vols)
+                        })
+                
+                comparison_df = pd.DataFrame(comparison_data)
+                st.dataframe(comparison_df, use_container_width=True)
+                
+                # Flag large discrepancies
+                large_diff = comparison_df[abs(comparison_df["Difference (%)"]) > 10]
+                if not large_diff.empty:
+                    st.warning(
+                        f"⚠️ **Large discrepancies detected** (>10%) for products: {', '.join(large_diff['Product'].tolist())}"
+                    )
             # ===== 2. ZONE COMPARISON (MOVED UP) =====
             st.markdown('<div class="section-header">📉 Zone Comparison</div>', unsafe_allow_html=True)
 
@@ -1179,6 +1279,7 @@ if st.session_state.analysis_complete and st.session_state.results:
         st.error(f"❌ Display error: {e}")
         with st.expander("Details"):
             st.exception(e)
+
 
 
 
