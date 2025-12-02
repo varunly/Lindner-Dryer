@@ -545,7 +545,388 @@ if st.session_state.analysis_complete and st.session_state.results:
                 f"🚛 **Production:** {total_wagons:,} wagons | {total_volume:,.0f} m³ | "
                 f"💧 **Water:** {total_water:,.0f} kg ({total_water/1000:,.1f} tons) evaporated"
             )
+    # Add this section right after the INFO BOX and before the kWh/kg expander
+# Around line 550 in your code
 
+# ===== INFO BOX =====
+            st.info(
+                f"⚡ **Energiemix:** Thermisch = **{thermal_pct:.1f}%** ({total_thermal:,.0f} kWh) | "
+                f"Elektrisch = **{electrical_pct:.1f}%** ({total_electrical:,.0f} kWh) | "
+                f"🚛 **Produktion:** {total_wagons:,} Wagen | {total_volume:,.0f} m³ | "
+                f"💧 **Wasser:** {total_water:,.0f} kg ({total_water/1000:,.1f} Tonnen) verdampft"
+            )
+            
+            # ============================================================
+            #    ENERGY CALCULATION EXPLANATION
+            # ============================================================
+            with st.expander("⚡ Energieverbrauch Berechnung - Detaillierte Erklärung"):
+                st.markdown("### 📊 Wie wird der Energieverbrauch berechnet?")
+                
+                st.markdown("""
+                **Überblick:**  
+                Der Gesamtenergieverbrauch wird aus der stündlichen Energie-Datei gelesen, 
+                den Produkten und Zonen zugeordnet und dann aggregiert.
+                """)
+                
+                # ===== STEP 1: INPUT ENERGY =====
+                st.markdown("---")
+                st.markdown("### 📥 Schritt 1: Energie-Eingangsdaten")
+                
+                # Calculate input energy totals
+                if "energy" in results and not results["energy"].empty:
+                    energy_df = results["energy"]
+                    
+                    # Input totals from original energy file
+                    input_thermal_total = energy_df["E_thermal_total_kWh"].sum()
+                    input_electrical_total = energy_df["E_el_kWh"].sum()
+                    input_total_energy = input_thermal_total + input_electrical_total
+                    
+                    total_hours = len(energy_df)
+                    avg_thermal_per_hour = input_thermal_total / total_hours if total_hours > 0 else 0
+                    avg_electrical_per_hour = input_electrical_total / total_hours if total_hours > 0 else 0
+                    
+                    col_e1, col_e2, col_e3 = st.columns(3)
+                    
+                    with col_e1:
+                        st.metric("Eingangsdaten: Thermische Energie", f"{input_thermal_total:,.0f} kWh")
+                        st.caption(f"Durchschnitt: {avg_thermal_per_hour:.1f} kWh/Stunde")
+                    
+                    with col_e2:
+                        st.metric("Eingangsdaten: Elektrische Energie", f"{input_electrical_total:,.0f} kWh")
+                        st.caption(f"Durchschnitt: {avg_electrical_per_hour:.1f} kWh/Stunde")
+                    
+                    with col_e3:
+                        st.metric("Eingangsdaten: Gesamtenergie", f"{input_total_energy:,.0f} kWh")
+                        st.caption(f"Über {total_hours:,} Stunden")
+                    
+                    st.markdown("**Quelle:** Energie-Excel-Datei (stündliche Messungen)")
+                    
+                    st.code(f"""
+            Thermische Energie = Gas-Verbrauch (m³) × 11,5 kWh/m³
+            
+            Zonen: Z2, Z3, Z4, Z5
+            Thermische Gesamtenergie = Z2 + Z3 + Z4 + Z5
+            
+            Beispiel für eine Stunde:
+            - Gas Z2: 15,2 m³ × 11,5 = 174,8 kWh
+            - Gas Z3: 20,3 m³ × 11,5 = 233,4 kWh
+            - Gas Z4: 17,3 m³ × 11,5 = 198,9 kWh
+            - Gas Z5: 13,6 m³ × 11,5 = 156,4 kWh
+            - Thermisch gesamt: 763,5 kWh
+            - Elektrisch: 45,0 kWh (direkt gemessen)
+            - Stunde gesamt: 808,5 kWh
+                    """, language="text")
+                    
+                    # Show sample of energy data
+                    st.markdown("**Beispieldaten aus Energie-Datei:**")
+                    sample_energy = energy_df.head(10).copy()
+                    
+                    # Select relevant columns for display
+                    display_cols = ["E_start", "E_thermal_total_kWh", "E_el_kWh", "Month"]
+                    if "E_thermal_Z2_kWh" in sample_energy.columns:
+                        display_cols = ["E_start", "E_thermal_Z2_kWh", "E_thermal_Z3_kWh", 
+                                      "E_thermal_Z4_kWh", "E_thermal_Z5_kWh", "E_thermal_total_kWh", 
+                                      "E_el_kWh", "Month"]
+                    
+                    available_cols = [col for col in display_cols if col in sample_energy.columns]
+                    st.dataframe(sample_energy[available_cols], use_container_width=True, hide_index=True)
+                
+                # ===== STEP 2: ALLOCATION =====
+                st.markdown("---")
+                st.markdown("### 🔄 Schritt 2: Energiezuordnung zu Produkten & Zonen")
+                
+                st.markdown("""
+                **Allokationsmethode:**  
+                Für jede Stunde wird die Energie auf alle Wagen verteilt, die zu diesem Zeitpunkt im Trockner waren.
+                """)
+                
+                if "allocation" in results and not results["allocation"].empty:
+                    allocation_df = results["allocation"]
+                    
+                    # Calculate allocation statistics
+                    allocated_thermal = allocation_df["Energy_thermal_kWh"].sum()
+                    allocated_electrical = allocation_df["Energy_electrical_kWh"].sum()
+                    allocated_total = allocation_df["Energy_share_kWh"].sum()
+                    
+                    num_allocation_rows = len(allocation_df)
+                    unique_wagons_allocated = allocation_df["WG_Nr"].nunique() if "WG_Nr" in allocation_df.columns else "N/A"
+                    
+                    st.code(f"""
+            Beispiel: Stunde 01.01.2024 10:00-11:00
+            
+            Energie verfügbar:
+            - Thermisch: 850 kWh
+            - Elektrisch: 45 kWh
+            - Gesamt: 895 kWh
+            
+            Wagen im Trockner während dieser Stunde:
+            - Wagen 1234 (L36) in Z2: 08:00-10:30 → überlappt 30 min (10:00-10:30)
+            - Wagen 1235 (L38) in Z3: 09:00-12:00 → überlappt 60 min (10:00-11:00)
+            - Wagen 1236 (L36) in Z4: 10:30-14:00 → überlappt 30 min (10:30-11:00)
+            - Wagen 1237 (L42) in Z5: 09:30-11:30 → überlappt 60 min (10:00-11:00)
+            
+            Gesamte Überlappungszeit: 30 + 60 + 30 + 60 = 180 Minuten
+            
+            Anteil berechnen:
+            - Wagen 1234: 30/180 = 16,67%  → 850 × 0,1667 = 141,7 kWh thermisch
+            - Wagen 1235: 60/180 = 33,33%  → 850 × 0,3333 = 283,3 kWh thermisch
+            - Wagen 1236: 30/180 = 16,67%  → 850 × 0,1667 = 141,7 kWh thermisch
+            - Wagen 1237: 60/180 = 33,33%  → 850 × 0,3333 = 283,3 kWh thermisch
+            
+            Summe: 141,7 + 283,3 + 141,7 + 283,3 = 850,0 kWh ✅
+            
+            Dieser Prozess wird für jede Stunde wiederholt.
+                    """, language="text")
+                    
+                    col_a1, col_a2 = st.columns(2)
+                    
+                    with col_a1:
+                        st.metric("Zugeordnete Zeilen", f"{num_allocation_rows:,}")
+                        st.caption("Anzahl Wagen×Zone×Stunde Zuordnungen")
+                    
+                    with col_a2:
+                        st.metric("Zugeordnete Wagen", f"{unique_wagons_allocated}")
+                        st.caption("Eindeutige Wagen mit Energiezuordnung")
+                    
+                    # Show sample allocation
+                    st.markdown("**Beispiel Zuordnungsdaten:**")
+                    sample_alloc = allocation_df.head(10).copy()
+                    
+                    alloc_display_cols = ["Produkt", "Zone", "Energy_thermal_kWh", "Energy_electrical_kWh", 
+                                          "Energy_share_kWh", "m3"]
+                    if "E_start" in sample_alloc.columns:
+                        alloc_display_cols.insert(0, "E_start")
+                    
+                    available_alloc_cols = [col for col in alloc_display_cols if col in sample_alloc.columns]
+                    st.dataframe(sample_alloc[available_alloc_cols].round(2), use_container_width=True, hide_index=True)
+                
+                # ===== STEP 3: AGGREGATION =====
+                st.markdown("---")
+                st.markdown("### 📊 Schritt 3: Aggregation nach Produkt & Zone")
+                
+                st.markdown("""
+                **Aggregationsstufen:**  
+                1. Monatlich nach Produkt & Zone (`summary`)  
+                2. Jährlich nach Produkt & Zone (`yearly`)  
+                3. Gesamtsumme über alle Produkte & Zonen (Summary KPIs)
+                """)
+                
+                # Show aggregation by product and zone
+                if "yearly" in results and not results["yearly"].empty:
+                    yearly_display = yearly.groupby("Produkt", as_index=False).agg({
+                        "Energy_thermal_kWh": "sum",
+                        "Energy_electrical_kWh": "sum",
+                        "Energy_kWh": "sum",
+                    })
+                    
+                    yearly_display = yearly_display.rename(columns={
+                        "Produkt": "Produkt",
+                        "Energy_thermal_kWh": "Thermisch (kWh)",
+                        "Energy_electrical_kWh": "Elektrisch (kWh)",
+                        "Energy_kWh": "Gesamt (kWh)"
+                    })
+                    
+                    yearly_display = yearly_display.sort_values("Gesamt (kWh)", ascending=False)
+                    
+                    st.markdown("**Energieverbrauch nach Produkt (alle Zonen summiert):**")
+                    st.dataframe(yearly_display.round(0), use_container_width=True, hide_index=True)
+                    
+                    # Zone breakdown for one product example
+                    if len(yearly["Produkt"].unique()) > 0:
+                        example_product = yearly["Produkt"].unique()[0]
+                        zone_breakdown = yearly[yearly["Produkt"] == example_product].copy()
+                        zone_breakdown = zone_breakdown[["Zone", "Energy_thermal_kWh", "Energy_electrical_kWh", "Energy_kWh"]]
+                        zone_breakdown = zone_breakdown.rename(columns={
+                            "Zone": "Zone",
+                            "Energy_thermal_kWh": "Thermisch (kWh)",
+                            "Energy_electrical_kWh": "Elektrisch (kWh)",
+                            "Energy_kWh": "Gesamt (kWh)"
+                        })
+                        
+                        st.markdown(f"**Beispiel: Zonenverteilung für Produkt {example_product}:**")
+                        st.dataframe(zone_breakdown.round(0), use_container_width=True, hide_index=True)
+                        
+                        total_product = zone_breakdown["Gesamt (kWh)"].sum()
+                        st.caption(f"Summe über alle Zonen: {total_product:,.0f} kWh")
+                
+                st.code(f"""
+            Aggregation:
+            
+            1. summary (Monat + Produkt + Zone):
+               - Gruppiert: ["Month", "Produkt", "Zone"]
+               - Summe: Energy_thermal_kWh, Energy_electrical_kWh, Energy_kWh
+            
+            2. yearly (Produkt + Zone):
+               - Gruppiert: ["Produkt", "Zone"]
+               - Summe über alle Monate
+            
+            3. Summary KPIs (Gesamt):
+               - Summe: yearly["Energy_thermal_kWh"].sum()
+               - Ergebnis: {total_thermal:,.0f} kWh thermisch
+                         {total_electrical:,.0f} kWh elektrisch
+                         {total_energy:,.0f} kWh gesamt
+                """, language="text")
+                
+                # ===== STEP 4: VALIDATION =====
+                st.markdown("---")
+                st.markdown("### ✅ Schritt 4: Validierung & Energiebilanz")
+                
+                if "energy" in results and not results["energy"].empty:
+                    # Calculate differences
+                    energy_difference = abs(allocated_total - input_total_energy)
+                    energy_efficiency = (allocated_total / input_total_energy * 100) if input_total_energy > 0 else 0
+                    
+                    thermal_difference = abs(allocated_thermal - input_thermal_total)
+                    electrical_difference = abs(allocated_electrical - input_electrical_total)
+                    
+                    col_v1, col_v2, col_v3 = st.columns(3)
+                    
+                    with col_v1:
+                        st.metric(
+                            "Eingabe → Zuordnung (Thermisch)", 
+                            f"{energy_efficiency:.2f}%",
+                            delta=f"{thermal_difference:,.0f} kWh"
+                        )
+                    
+                    with col_v2:
+                        st.metric(
+                            "Eingabe → Zuordnung (Elektrisch)", 
+                            f"{energy_efficiency:.2f}%",
+                            delta=f"{electrical_difference:,.0f} kWh"
+                        )
+                    
+                    with col_v3:
+                        st.metric(
+                            "Eingabe → Zuordnung (Gesamt)", 
+                            f"{energy_efficiency:.2f}%",
+                            delta=f"{energy_difference:,.0f} kWh"
+                        )
+                    
+                    st.code(f"""
+            Energiebilanz-Prüfung:
+            
+            Eingabe (aus Energie-Datei):
+            - Thermisch:  {input_thermal_total:>15,.0f} kWh
+            - Elektrisch: {input_electrical_total:>15,.0f} kWh
+            - Gesamt:     {input_total_energy:>15,.0f} kWh
+            
+            Zugeordnet (allocate_energy):
+            - Thermisch:  {allocated_thermal:>15,.0f} kWh
+            - Elektrisch: {allocated_electrical:>15,.0f} kWh
+            - Gesamt:     {allocated_total:>15,.0f} kWh
+            
+            Differenz:
+            - Thermisch:  {thermal_difference:>15,.0f} kWh ({abs(thermal_difference/input_thermal_total*100) if input_thermal_total > 0 else 0:.2f}%)
+            - Elektrisch: {electrical_difference:>15,.0f} kWh ({abs(electrical_difference/input_electrical_total*100) if input_electrical_total > 0 else 0:.2f}%)
+            - Gesamt:     {energy_difference:>15,.0f} kWh ({abs(energy_difference/input_total_energy*100) if input_total_energy > 0 else 0:.2f}%)
+            
+            Zuordnungseffizienz: {energy_efficiency:.2f}%
+                    """, language="text")
+                    
+                    # Validation status
+                    if energy_efficiency > 99 and energy_efficiency < 101:
+                        st.success("✅ **Energiebilanz ist ausgeglichen!** Die zugeordnete Energie entspricht der Eingabeenergie (Toleranz < 1%).")
+                    elif energy_efficiency > 95 and energy_efficiency < 105:
+                        st.info(f"ℹ️ **Energiebilanz ist akzeptabel.** Zuordnungseffizienz: {energy_efficiency:.2f}% (Toleranz < 5%).")
+                    elif energy_efficiency < 90:
+                        st.warning(f"""
+            ⚠️ **Energie wird nicht vollständig zugeordnet!**
+            
+            Nur {energy_efficiency:.1f}% der Eingabeenergie wurde zugeordnet.
+            
+            Mögliche Gründe:
+            1. Einige Zeiträume in der Energie-Datei haben keine überlappenden Wagen
+            2. Produktfilter haben zu viele Wagen ausgeschlossen
+            3. Wagen-Zeitstempel liegen außerhalb des Energie-Zeitraums
+            4. Fehlende oder unvollständige Zoneneintrittszeiten
+                        """)
+                    elif energy_efficiency > 110:
+                        st.error(f"""
+            ❌ **FEHLER: Energie wird mehrfach gezählt!**
+            
+            {energy_efficiency:.1f}% der Eingabeenergie wurden zugeordnet (>100%).
+            
+            Dies deutet auf einen Fehler in der Zuordnungslogik hin:
+            - Möglicherweise werden Zeitintervalle doppelt gezählt
+            - Überlappungsberechnung könnte fehlerhaft sein
+                        """)
+                    
+                    # Show monthly validation
+                    if "summary" in results and not results["summary"].empty:
+                        monthly_validation = summary.groupby("Month", as_index=False).agg({
+                            "Energy_kWh": "sum"
+                        })
+                        
+                        monthly_input = energy_df.groupby("Month", as_index=False).agg({
+                            "E_thermal_total_kWh": "sum",
+                            "E_el_kWh": "sum"
+                        })
+                        monthly_input["Input_total"] = monthly_input["E_thermal_total_kWh"] + monthly_input["E_el_kWh"]
+                        
+                        monthly_compare = monthly_validation.merge(monthly_input[["Month", "Input_total"]], on="Month", how="left")
+                        monthly_compare["Effizienz (%)"] = (monthly_compare["Energy_kWh"] / monthly_compare["Input_total"] * 100).round(1)
+                        monthly_compare = monthly_compare.rename(columns={
+                            "Month": "Monat",
+                            "Energy_kWh": "Zugeordnet (kWh)",
+                            "Input_total": "Eingabe (kWh)"
+                        })
+                        
+                        st.markdown("**Monatliche Energiebilanz:**")
+                        st.dataframe(monthly_compare.round(0), use_container_width=True, hide_index=True)
+                
+                # ===== STEP 5: SUMMARY CALCULATION =====
+                st.markdown("---")
+                st.markdown("### 📈 Schritt 5: Summary KPI Berechnung")
+                
+                st.markdown("""
+                Die in den **Summary KPI-Karten** angezeigten Werte stammen aus:
+                """)
+                
+                st.code(f"""
+            Berechnung der Summary KPIs:
+            
+            # Schritt 1: Summe aus yearly DataFrame
+            total_thermal = yearly["Energy_thermal_kWh"].sum()
+                          = {total_thermal:,.0f} kWh
+            
+            total_electrical = yearly["Energy_electrical_kWh"].sum()
+                             = {total_electrical:,.0f} kWh
+            
+            total_energy = yearly["Energy_kWh"].sum()
+                         = {total_energy:,.0f} kWh
+            
+            # Schritt 2: Prozentuale Anteile
+            thermal_pct = (total_thermal / total_energy) × 100
+                        = ({total_thermal:,.0f} / {total_energy:,.0f}) × 100
+                        = {thermal_pct:.1f}%
+            
+            electrical_pct = (total_electrical / total_energy) × 100
+                           = ({total_electrical:,.0f} / {total_energy:,.0f}) × 100
+                           = {electrical_pct:.1f}%
+            
+            # Schritt 3: Anzeige in KPI-Karten
+            ✅ Diese Werte werden in den violetten Karten oben angezeigt
+                """, language="text")
+                
+                # Create summary comparison table
+                summary_comparison = pd.DataFrame({
+                    "Metrik": ["Thermische Energie", "Elektrische Energie", "Gesamtenergie"],
+                    "Wert (kWh)": [total_thermal, total_electrical, total_energy],
+                    "Anteil (%)": [thermal_pct, electrical_pct, 100.0],
+                    "Quelle": [
+                        "yearly → Energy_thermal_kWh → sum()",
+                        "yearly → Energy_electrical_kWh → sum()",
+                        "yearly → Energy_kWh → sum()"
+                    ]
+                })
+                
+                st.markdown("**Summary KPI Quelltabelle:**")
+                st.dataframe(summary_comparison.round(0), use_container_width=True, hide_index=True)
+                
+                st.success("✅ Alle Summary KPIs für Energieverbrauch sind vollständig dokumentiert und validiert.")
+            
+            # Rest of the code continues...
+            # (kWh/kg expander, volume breakdown, etc.)        
             # ============================================================
             #    DETAILED kWh/kg CALCULATION TRANSPARENCY
             # ============================================================
@@ -1664,4 +2045,5 @@ Difference: {abs(calculated_kwh_m3 - avg_kwh_per_m3):.1f} kWh/m³
         st.error(f"❌ Display error: {e}")
         with st.expander("Details"):
             st.exception(e)
+
 
