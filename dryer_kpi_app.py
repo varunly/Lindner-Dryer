@@ -329,7 +329,7 @@ if st.session_state.analysis_complete and st.session_state.results:
         if summary.empty:
             st.warning("⚠️ No data available after filtering.")
         else:
-            # ===== 1. SUMMARY KPIs =====
+                        # ===== 1. SUMMARY KPIs (ENHANCED) =====
             st.markdown('<div class="section-header">📈 Summary KPIs</div>', unsafe_allow_html=True)
 
             total_thermal = float(yearly["Energy_thermal_kWh"].sum())
@@ -337,21 +337,59 @@ if st.session_state.analysis_complete and st.session_state.results:
             total_energy = float(yearly["Energy_kWh"].sum())
             total_volume = float(yearly["Volume_m3"].sum())
             total_water = float(yearly["Water_kg"].sum())
-            avg_kwh_per_m3 = float(yearly["kWh_per_m3"].mean()) if len(yearly) > 0 else 0
-            avg_kwh_per_kg = float(yearly["kWh_per_kg"].mean()) if len(yearly) > 0 else 0
+            
+            # Calculate KPIs
+            avg_kwh_per_m3 = safe_divide(total_energy, total_volume)
+            avg_kwh_thermal_per_m3 = safe_divide(total_thermal, total_volume)
+            avg_kwh_per_kg = safe_divide(total_energy, total_water)
+            avg_kwh_thermal_per_kg = safe_divide(total_thermal, total_water)
 
-            c1, c2, c3, c4, c5 = st.columns(5)
+            # Row 1: Energy Metrics
+            st.subheader("⚡ Energy Consumption")
+            c1, c2, c3, c4 = st.columns(4)
             with c1:
                 st.markdown(create_kpi_card("Thermal Energy", total_thermal, "kWh"), unsafe_allow_html=True)
             with c2:
-                st.markdown(create_kpi_card("Total Energy", total_energy, "kWh"), unsafe_allow_html=True)
+                st.markdown(create_kpi_card("Electrical Energy", total_electrical, "kWh"), unsafe_allow_html=True)
             with c3:
-                st.markdown(create_kpi_card("Total Volume", total_volume, "m³"), unsafe_allow_html=True)
+                st.markdown(create_kpi_card("Total Energy", total_energy, "kWh"), unsafe_allow_html=True)
             with c4:
-                st.markdown(create_kpi_card("Avg kWh/m³", avg_kwh_per_m3, "kWh/m³"), unsafe_allow_html=True)
-         
+                thermal_pct = (total_thermal / total_energy * 100) if total_energy > 0 else 0
+                st.markdown(create_kpi_card("Thermal %", thermal_pct, "%"), unsafe_allow_html=True)
             
+            # Row 2: Production & Water Metrics
+            st.subheader("🏭 Production & Water")
+            c5, c6, c7, c8 = st.columns(4)
+            with c5:
+                st.markdown(create_kpi_card("Total Volume", total_volume, "m³"), unsafe_allow_html=True)
+            with c6:
+                st.markdown(create_kpi_card("Water Evaporated", total_water, "kg"), unsafe_allow_html=True)
+            with c7:
+                water_per_m3 = safe_divide(total_water, total_volume)
+                st.markdown(create_kpi_card("Water/m³", water_per_m3, "kg/m³"), unsafe_allow_html=True)
+            with c8:
+                water_tons = total_water / 1000
+                st.markdown(create_kpi_card("Water (tons)", water_tons, "t"), unsafe_allow_html=True)
+            
+            # Row 3: Efficiency Metrics
+            st.subheader("📊 Energy Efficiency")
+            c9, c10, c11, c12 = st.columns(4)
+            with c9:
+                st.markdown(create_kpi_card("Total kWh/m³", avg_kwh_per_m3, "kWh/m³"), unsafe_allow_html=True)
+            with c10:
+                st.markdown(create_kpi_card("Thermal kWh/m³", avg_kwh_thermal_per_m3, "kWh/m³"), unsafe_allow_html=True)
+            with c11:
+                st.markdown(create_kpi_card("Total kWh/kg water", avg_kwh_per_kg, "kWh/kg"), unsafe_allow_html=True)
+            with c12:
+                st.markdown(create_kpi_card("Thermal kWh/kg water", avg_kwh_thermal_per_kg, "kWh/kg"), unsafe_allow_html=True)
+            
+            # Summary info box
             electrical_pct = (total_electrical / total_energy * 100) if total_energy > 0 else 0
+            st.info(
+                f"⚡ **Energy Mix:** Thermal = **{thermal_pct:.1f}%** ({total_thermal:,.0f} kWh) | "
+                f"Electrical = **{electrical_pct:.1f}%** ({total_electrical:,.0f} kWh) | "
+                f"💧 **Water:** {total_water:,.0f} kg ({water_tons:,.1f} tons) evaporated from {total_volume:,.0f} m³"
+            )
 
             # ===== 2. ZONE COMPARISON (MOVED UP) =====
             st.markdown('<div class="section-header">📉 Zone Comparison</div>', unsafe_allow_html=True)
@@ -1140,6 +1178,7 @@ if st.session_state.analysis_complete and st.session_state.results:
         st.error(f"❌ Display error: {e}")
         with st.expander("Details"):
             st.exception(e)
+
 
 
 
