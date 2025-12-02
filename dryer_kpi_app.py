@@ -350,363 +350,268 @@ if st.session_state.analysis_complete and st.session_state.results:
                     f"💧 **Water:** {total_water:,.0f} kg ({total_water/1000:,.1f} tons) evaporated"
                 )
                 
-                            # ===== 1. SUMMARY KPIs (COMPLETE & FIXED) =====
-            st.markdown('<div class="section-header">📈 Summary KPIs</div>', unsafe_allow_html=True)
-
-            # ✅ FIX: Use yearly for energy, but wagons for volume to avoid double-counting
-            total_thermal = float(yearly["Energy_thermal_kWh"].sum())
-            total_electrical = float(yearly["Energy_electrical_kWh"].sum())
-            total_energy = float(yearly["Energy_kWh"].sum())
-            
-            # ✅ CORRECT: Get volume from wagon data (not yearly which has zone duplication)
-            total_volume = float(results["wagons"]["m3"].sum())
-            
-            # Water calculation - use the summary data aggregated by product only
-            product_summary_for_water = summary.groupby("Produkt", as_index=False).agg({
-                "Volume_m3": "sum",
-                "Water_kg": "sum",
-            })
-            total_water = float(product_summary_for_water["Water_kg"].sum())
-            
-            # Calculate KPIs
-            avg_kwh_per_m3 = safe_divide(total_energy, total_volume)
-            avg_kwh_thermal_per_m3 = safe_divide(total_thermal, total_volume)
-            avg_kwh_per_kg = safe_divide(total_energy, total_water)
-            avg_kwh_thermal_per_kg = safe_divide(total_thermal, total_water)
-            
-            # Calculate additional metrics needed for expander
-            thermal_pct = (total_thermal / total_energy * 100) if total_energy > 0 else 0
-            electrical_pct = (total_electrical / total_energy * 100) if total_energy > 0 else 0
-            total_wagons = len(results["wagons"])
-            avg_water_per_m3 = safe_divide(total_water, total_volume)
-
-            # Row 1: Energy Metrics
-            st.subheader("⚡ Energy Consumption")
-            c1, c2, c3 = st.columns(3)
-            with c1:
-                st.markdown(create_kpi_card("Thermal Energy", total_thermal, "kWh"), unsafe_allow_html=True)
-            with c2:
-                st.markdown(create_kpi_card("Electrical Energy", total_electrical, "kWh"), unsafe_allow_html=True)
-            with c3:
-                st.markdown(create_kpi_card("Total Energy", total_energy, "kWh"), unsafe_allow_html=True)
-            
-            # Row 2: Production & Water Metrics
-            st.subheader("🏭 Production")
-            c4, c5, c6 = st.columns(3)
-            with c4:
-                st.markdown(create_kpi_card("Total Volume", total_volume, "m³"), unsafe_allow_html=True)
-            with c5:
-                st.markdown(create_kpi_card("Water Evaporated", total_water, "kg"), unsafe_allow_html=True)
-            with c6:
-                st.markdown(create_kpi_card("Water/m³", avg_water_per_m3, "kg/m³"), unsafe_allow_html=True)
-            
-            # Row 3: Energy Efficiency Metrics
-            st.subheader("📊 Energy Efficiency")
-            c7, c8, c9, c10 = st.columns(4)
-            with c7:
-                st.markdown(create_kpi_card("kWh/kg water", avg_kwh_per_kg, "kWh/kg"), unsafe_allow_html=True)
-            with c8:
-                st.markdown(create_kpi_card("Thermal kWh/kg", avg_kwh_thermal_per_kg, "kWh/kg"), unsafe_allow_html=True)
-            with c9:
-                st.markdown(create_kpi_card("kWh/m³", avg_kwh_per_m3, "kWh/m³"), unsafe_allow_html=True)
-            with c10:
-                st.markdown(create_kpi_card("Thermal kWh/m³", avg_kwh_thermal_per_m3, "kWh/m³"), unsafe_allow_html=True)
-            
-            # Summary info box
-            st.info(
-                f"⚡ **Energy Mix:** Thermal = **{thermal_pct:.1f}%** ({total_thermal:,.0f} kWh) | "
-                f"Electrical = **{electrical_pct:.1f}%** ({total_electrical:,.0f} kWh) | "
-                f"🚛 **Production:** {total_wagons:,} wagons | {total_volume:,.0f} m³ | "
-                f"💧 **Water:** {total_water:,.0f} kg ({total_water/1000:,.1f} tons) evaporated"
-            )
-            
-            # ===== SUMMARY KPI CALCULATION BREAKDOWN =====
-            with st.expander("🔍 How Summary KPIs Are Calculated"):
-                st.markdown("### 📊 Calculation Methodology")
+                # ===== 1. SUMMARY KPIs (COMPLETE & FIXED) =====
+                st.markdown('<div class="section-header">📈 Summary KPIs</div>', unsafe_allow_html=True)
                 
-                st.markdown("""
-                This section explains exactly how each KPI in the Summary section is calculated, 
-                including data sources and formulas used.
-                """)
+                # ===== ENERGY TOTALS =====
+                total_thermal = float(yearly["Energy_thermal_kWh"].sum())
+                total_electrical = float(yearly["Energy_electrical_kWh"].sum())
+                total_energy = float(yearly["Energy_kWh"].sum())
                 
-                # ===== ENERGY CALCULATIONS =====
-                st.markdown("---")
-                st.markdown("## ⚡ Energy Consumption")
+                # ===== CORRECT VOLUME: FROM WAGONS, NOT YEARLY (AVOIDS MULTIPLICATION BY ZONES) =====
+                total_volume = float(results["wagons"]["m3"].sum())
                 
-                col_e1, col_e2 = st.columns(2)
+                # ===== WATER CALCULATION =====
+                product_summary_for_water = summary.groupby("Produkt", as_index=False).agg({
+                    "Volume_m3": "sum",
+                    "Water_kg": "sum",
+                })
+                total_water = float(product_summary_for_water["Water_kg"].sum())
                 
-                with col_e1:
-                    st.markdown("### 🔥 Thermal Energy (Gas)")
-                    st.code(f"""
-Source: Hourly energy file
-Zones: Z2, Z3, Z4, Z5
-
-For each zone:
-  Gas consumed (m³) × 11.5 kWh/m³
-
-Calculation:
-  Total Thermal = Σ(Zone 2 + Zone 3 + Zone 4 + Zone 5)
-                = {total_thermal:,.0f} kWh
-
-Data points: {len(results['energy'])} hourly records
-                    """, language="text")
+                # ===== KPI CALCULATIONS =====
+                avg_kwh_per_m3 = safe_divide(total_energy, total_volume)
+                avg_kwh_thermal_per_m3 = safe_divide(total_thermal, total_volume)
+                avg_kwh_per_kg = safe_divide(total_energy, total_water)
+                avg_kwh_thermal_per_kg = safe_divide(total_thermal, total_water)
                 
-                with col_e2:
-                    st.markdown("### ⚡ Electrical Energy")
-                    st.code(f"""
-Source: Hourly energy file
-Column: "Energieverbrauch, elektr. [kWh]"
-
-Calculation:
-  Total Electrical = Σ(all hourly electrical consumption)
-                   = {total_electrical:,.0f} kWh
-
-Percentage of total: {electrical_pct:.1f}%
-                    """, language="text")
+                thermal_pct = (total_thermal / total_energy * 100) if total_energy > 0 else 0
+                electrical_pct = (total_electrical / total_energy * 100) if total_energy > 0 else 0
                 
-                st.markdown("### ➕ Total Energy")
-                st.code(f"""
-Total Energy = Thermal Energy + Electrical Energy
-             = {total_thermal:,.0f} + {total_electrical:,.0f}
-             = {total_energy:,.0f} kWh
+                total_wagons = len(results["wagons"])
+                avg_water_per_m3 = safe_divide(total_water, total_volume)
+                
+                # ============================================================
+                #                     SUMMARY CARDS
+                # ============================================================
+                
+                # --- ENERGY CARDS ---
+                st.subheader("⚡ Energy Consumption")
+                c1, c2, c3 = st.columns(3)
+                
+                with c1:
+                    st.markdown(create_kpi_card("Thermal Energy", total_thermal, "kWh"), unsafe_allow_html=True)
+                with c2:
+                    st.markdown(create_kpi_card("Electrical Energy", total_electrical, "kWh"), unsafe_allow_html=True)
+                with c3:
+                    st.markdown(create_kpi_card("Total Energy", total_energy, "kWh"), unsafe_allow_html=True)
+                
+                # --- PRODUCTION CARDS ---
+                st.subheader("🏭 Production")
+                c4, c5, c6 = st.columns(3)
+                
+                with c4:
+                    st.markdown(create_kpi_card("Total Volume", total_volume, "m³"), unsafe_allow_html=True)
+                with c5:
+                    st.markdown(create_kpi_card("Water Evaporated", total_water, "kg"), unsafe_allow_html=True)
+                with c6:
+                    st.markdown(create_kpi_card("Water/m³", avg_water_per_m3, "kg/m³"), unsafe_allow_html=True)
+                
+                # --- EFFICIENCY CARDS ---
+                st.subheader("📊 Energy Efficiency")
+                c7, c8, c9, c10 = st.columns(4)
+                
+                with c7:
+                    st.markdown(create_kpi_card("kWh/kg water", avg_kwh_per_kg, "kWh/kg"), unsafe_allow_html=True)
+                with c8:
+                    st.markdown(create_kpi_card("Thermal kWh/kg", avg_kwh_thermal_per_kg, "kWh/kg"), unsafe_allow_html=True)
+                with c9:
+                    st.markdown(create_kpi_card("kWh/m³", avg_kwh_per_m3, "kWh/m³"), unsafe_allow_html=True)
+                with c10:
+                    st.markdown(create_kpi_card("Thermal kWh/m³", avg_kwh_thermal_per_m3, "kWh/m³"), unsafe_allow_html=True)
+                
+                # ===== INFO BOX =====
+                st.info(
+                    f"⚡ **Energy Mix:** Thermal = **{thermal_pct:.1f}%** ({total_thermal:,.0f} kWh) | "
+                    f"Electrical = **{electrical_pct:.1f}%** ({total_electrical:,.0f} kWh) | "
+                    f"🚛 **Production:** {total_wagons:,} wagons | {total_volume:,.0f} m³ | "
+                    f"💧 **Water:** {total_water:,.0f} kg ({total_water/1000:,.1f} tons) evaporated"
+                )
+                
+                # ============================================================
+                #            EXPANDER – KPI CALCULATION EXPLANATION
+                # ============================================================
+                
+                with st.expander("🔍 How Summary KPIs Are Calculated"):
+                
+                    st.markdown("### 📊 Calculation Methodology")
+                    st.markdown("""
+                    This explains data sources and formulas used to compute the KPIs above.
+                    """)
+                
+                    # ------------------------------------------------------------
+                    # ENERGY SECTION
+                    # ------------------------------------------------------------
+                    st.markdown("---")
+                    st.markdown("## ⚡ Energy Consumption")
+                
+                    col_e1, col_e2 = st.columns(2)
+                
+                    with col_e1:
+                        st.markdown("### 🔥 Thermal Energy (Gas)")
+                        st.code(f"""
+                Source: Hourly Energy File
+                Zones: Z2, Z3, Z4, Z5
+                
+                Thermal Energy = Gas (m³) × 11.5 kWh/m³
+                Total Thermal = {total_thermal:,.0f} kWh
+                Records: {len(results['energy'])}
                 """, language="text")
                 
-                # Validation
-                st.markdown("**✅ Validation:**")
-                energy_ratio = total_thermal / total_electrical if total_electrical > 0 else 0
-                st.write(f"- Thermal/Electrical ratio: **{energy_ratio:.1f}x**")
-                if 5 <= energy_ratio <= 15:
-                    st.success("✓ Ratio is within expected range (5-15x) for dryer operations")
-                else:
-                    st.warning(f"⚠ Ratio {energy_ratio:.1f}x is outside typical range (5-15x)")
+                    with col_e2:
+                        st.markdown("### ⚡ Electrical Energy")
+                        st.code(f"""
+                Source: Hourly Energy File
+                Column: "Energieverbrauch, elektr. [kWh]"
                 
-                # ===== VOLUME CALCULATIONS =====
-                st.markdown("---")
-                st.markdown("## 📦 Volume Calculation")
-                
-                st.markdown(f"""
-**Source:** Hordenwagenverfolgung file  
-**Standard:** {PLATES_PER_WAGON} plates per wagon
-                """)
-                
-                # Volume breakdown by product
-                vol_breakdown = results["wagons"].groupby("Produkt").agg({
-                    "m3": ["sum", "mean", "count"]
-                }).round(3)
-                vol_breakdown.columns = ["Total Volume (m³)", "Avg/Wagon (m³)", "Wagon Count"]
-                vol_breakdown["% of Total"] = (vol_breakdown["Total Volume (m³)"] / total_volume * 100).round(1)
-                vol_breakdown = vol_breakdown.sort_values("Total Volume (m³)", ascending=False)
-                
-                st.dataframe(vol_breakdown, use_container_width=True)
-                
-                st.code(f"""
-Volume Calculation per Wagon:
-  Volume = {PLATES_PER_WAGON} plates × Volume per plate
-
-Example (L36):
-  Edge length: 602 mm = 0.602 m
-  Thickness:   36 mm = 0.036 m
-  Volume/plate = 0.602 × 0.602 × 0.036 = 0.01303 m³
-  Volume/wagon = {PLATES_PER_WAGON} × 0.01303 = {PLATES_PER_WAGON * 0.01303:.3f} m³
-
-Total Volume = Σ(all wagon volumes)
-             = {total_volume:,.1f} m³
+                Total Electrical = {total_electrical:,.0f} kWh
+                Electrical share = {electrical_pct:.1f}%
                 """, language="text")
                 
-                st.markdown("**✅ Validation:**")
-                st.write(f"- Total wagons: **{total_wagons:,}**")
-                avg_vol_per_wagon = safe_divide(total_volume, total_wagons)
-                st.write(f"- Average volume per wagon: **{avg_vol_per_wagon:.3f} m³**")
-                if 12000 <= total_volume <= 15000:
-                    st.success("✓ Total volume is within expected annual range (12,000-15,000 m³)")
-                elif total_volume < 12000:
-                    st.info(f"ℹ Total volume {total_volume:,.0f} m³ - May indicate partial year or filtered data")
-                else:
-                    st.warning(f"⚠ Total volume {total_volume:,.0f} m³ exceeds typical annual range")
-                
-                # ===== WATER CALCULATIONS =====
-                st.markdown("---")
-                st.markdown("## 💧 Water Evaporation Calculation")
-                
-                st.markdown(f"""
-**Method:** Formula-based calculation using product specifications  
-**Suspension weight:** {SUSPENSION_KG} kg
-                """)
-                
-                st.markdown("### Formula Structure")
-                st.latex(r"\text{Water/mm (g)} = \text{Slope} \times 330 + \text{Intercept}")
-                st.latex(r"\text{Water/Plate (kg)} = \frac{\text{Water/mm (g)} \times \text{Pressed Thickness (mm)}}{1000}")
-                st.latex(r"\text{Water/m}^3 \text{ (kg/m}^3\text{)} = \frac{\text{Water/Plate (kg)}}{\text{Volume/Plate (m}^3\text{)}}")
-                
-                # Water breakdown by product
-                water_breakdown = []
-                for prod in product_summary_for_water["Produkt"]:
-                    if prod in PRODUCT_SPECIFICATIONS:
-                        spec = PRODUCT_SPECIFICATIONS[prod]
-                        slope = spec["slope"]
-                        intercept = spec["intercept"]
-                        water_per_mm = slope * SUSPENSION_KG + intercept
-                        pressed_thick = spec["pressed_thickness_mm"]
-                        water_per_plate = (water_per_mm * pressed_thick) / 1000
-                        water_per_m3_calc = water_per_plate / spec["volume_m3"]
-                        
-                        prod_water = product_summary_for_water[product_summary_for_water["Produkt"] == prod]["Water_kg"].iloc[0]
-                        prod_volume = product_summary_for_water[product_summary_for_water["Produkt"] == prod]["Volume_m3"].iloc[0]
-                        
-                        water_breakdown.append({
-                            "Product": prod,
-                            "Formula": spec["formula"],
-                            "Water/mm (g)": round(water_per_mm, 1),
-                            "Water/Plate (kg)": round(water_per_plate, 3),
-                            "Water/m³ (kg/m³)": round(water_per_m3_calc, 1),
-                            "Volume (m³)": round(prod_volume, 1),
-                            "Total Water (kg)": round(prod_water, 0),
-                        })
-                
-                if water_breakdown:
-                    water_df = pd.DataFrame(water_breakdown)
-                    st.dataframe(water_df, use_container_width=True, hide_index=True)
-                
-                st.markdown("### Example Calculation (L36)")
-                st.code(f"""
-Formula: -0.025x + 76.6
-Suspension: {SUSPENSION_KG} kg
-Pressed thickness: 42 mm
-
-Step 1: Water/mm
-  = (-0.025 × {SUSPENSION_KG}) + 76.6
-  = -8.25 + 76.6
-  = 68.35 g/mm
-
-Step 2: Water/Plate
-  = 68.35 g/mm × 42 mm / 1000
-  = 2.871 kg
-
-Step 3: Water/m³
-  = 2.871 kg / 0.01303 m³
-  = 220.3 kg/m³
-
-Total Water Evaporated = Σ(all products)
-                       = {total_water:,.0f} kg
-                       = {total_water/1000:,.1f} tons
-                """, language="text")
-                
-                st.markdown("**✅ Validation:**")
-                st.write(f"- Average water per m³: **{avg_water_per_m3:.1f} kg/m³**")
-                avg_water_per_wagon = safe_divide(total_water, total_wagons)
-                st.write(f"- Water per wagon (avg): **{avg_water_per_wagon:.1f} kg**")
-                st.info("ℹ Water content varies by product type. Y44 has highest (~520 kg/m³), L36 has lower (~220 kg/m³)")
-                
-                # ===== EFFICIENCY KPIs =====
-                st.markdown("---")
-                st.markdown("## 📊 Energy Efficiency KPIs")
-                
-                col_k1, col_k2 = st.columns(2)
-                
-                with col_k1:
-                    st.markdown("### 🔥 kWh per kg Water")
+                    st.markdown("### ➕ Total Energy")
                     st.code(f"""
-Most important KPI for drying efficiency
-
-Formula:
-  kWh/kg = Total Energy / Total Water
-         = {total_energy:,.0f} / {total_water:,.0f}
-         = {avg_kwh_per_kg:.3f} kWh/kg
-
-Thermal only:
-  = {total_thermal:,.0f} / {total_water:,.0f}
-  = {avg_kwh_thermal_per_kg:.3f} kWh/kg
-
-Meaning: Energy needed to evaporate 1 kg of water
-                    """, language="text")
-                    
-                    st.markdown("**Industry Benchmarks:**")
-                    if avg_kwh_per_kg < 0.6:
-                        st.success("✓ Excellent efficiency (<0.6 kWh/kg)")
-                    elif avg_kwh_per_kg < 0.8:
-                        st.success("✓ Good efficiency (0.6-0.8 kWh/kg)")
-                    elif avg_kwh_per_kg < 1.0:
-                        st.warning("⚠ Moderate efficiency (0.8-1.0 kWh/kg)")
-                    else:
-                        st.error("❌ Low efficiency (>1.0 kWh/kg) - investigate losses")
-                
-                with col_k2:
-                    st.markdown("### 📦 kWh per m³")
-                    st.code(f"""
-Energy intensity per volume
-
-Formula:
-  kWh/m³ = Total Energy / Total Volume
-         = {total_energy:,.0f} / {total_volume:,.1f}
-         = {avg_kwh_per_m3:.1f} kWh/m³
-
-Thermal only:
-  = {total_thermal:,.0f} / {total_volume:,.1f}
-  = {avg_kwh_thermal_per_m3:.1f} kWh/m³
-
-Meaning: Energy needed to dry 1 m³ of product
-                    """, language="text")
-                    
-                    st.info("ℹ This varies by product mix. Products with higher water content (Y44) require more energy per m³")
-                
-                # ===== RELATIONSHIP BETWEEN KPIs =====
-                st.markdown("---")
-                st.markdown("## 🔗 Relationship Between KPIs")
-                
-                calculated_kwh_m3 = avg_kwh_per_kg * avg_water_per_m3
-                difference = abs(avg_kwh_per_m3 - calculated_kwh_m3)
-                
-                st.code(f"""
-kWh/m³ = kWh/kg × (Water/m³)
-
-Verification:
-  {avg_kwh_per_kg:.3f} × {avg_water_per_m3:.1f} = {calculated_kwh_m3:.1f} kWh/m³
-  
-  Actual kWh/m³: {avg_kwh_per_m3:.1f}
-  Difference: {difference:.1f} kWh/m³
+                Total Energy = Thermal + Electrical
+                             = {total_thermal:,.0f} + {total_electrical:,.0f}
+                             = {total_energy:,.0f} kWh
                 """, language="text")
                 
-                if difference < 10:
-                    st.success("✓ KPIs are mathematically consistent")
-                else:
-                    st.warning("⚠ Minor discrepancy due to rounding or averaging")
+                    # ------------------------------------------------------------
+                    # VOLUME SECTION
+                    # ------------------------------------------------------------
+                    st.markdown("---")
+                    st.markdown("## 📦 Volume Calculation")
                 
-                # ===== DATA SOURCES SUMMARY =====
-                st.markdown("---")
-                st.markdown("## 📚 Data Sources Summary")
+                    vol_breakdown = (
+                        results["wagons"]
+                        .groupby("Produkt")
+                        .agg({"m3": ["sum", "mean", "count"]})
+                        .round(3)
+                    )
+                    vol_breakdown.columns = ["Total Volume (m³)", "Avg/Wagon (m³)", "Wagon Count"]
+                    vol_breakdown["% of Total"] = (vol_breakdown["Total Volume (m³)"] / total_volume * 100).round(1)
+                    vol_breakdown = vol_breakdown.sort_values("Total Volume (m³)", ascending=False)
                 
-                source_data = {
-                    "KPI": [
-                        "Thermal Energy",
-                        "Electrical Energy",
-                        "Total Volume",
-                        "Water Evaporated",
-                        "kWh/kg water",
-                        "kWh/m³"
-                    ],
-                    "Source File": [
-                        "Energy file",
-                        "Energy file",
-                        "Hordenwagenverfolgung",
-                        "Calculated (Hordenwagen + Specs)",
-                        "Calculated",
-                        "Calculated"
-                    ],
-                    "Calculation": [
-                        "Σ(Gas × 11.5 kWh/m³) for Z2-Z5",
-                        "Σ(Hourly electrical)",
-                        f"Σ({PLATES_PER_WAGON} plates × volume/plate)",
-                        "Σ(Volume × Water/m³ formula)",
-                        "Total Energy / Total Water",
-                        "Total Energy / Total Volume"
-                    ]
-                }
+                    st.dataframe(vol_breakdown, use_container_width=True)
                 
-                st.dataframe(pd.DataFrame(source_data), use_container_width=True, hide_index=True)
+                    st.code(f"""
+                Total Volume = Σ(m³ per wagon)
+                             = {total_volume:.1f} m³
                 
-                st.success("""
-✅ **All calculations are transparent and traceable**
-- Energy data comes                                    
+                Wagons counted = {total_wagons}
+                Average per wagon = {avg_water_per_m3:.2f} kg/m³ water
+                """, language="text")
+                
+                    # ------------------------------------------------------------
+                    # WATER SECTION
+                    # ------------------------------------------------------------
+                    st.markdown("---")
+                    st.markdown("## 💧 Water Evaporation Calculation")
+                
+                    st.markdown(f"Suspension mass: **{SUSPENSION_KG} kg**")
+                
+                    # WATER BREAKDOWN TABLE
+                    water_breakdown = []
+                    for prod in product_summary_for_water["Produkt"]:
+                        if prod in PRODUCT_SPECIFICATIONS:
+                            spec = PRODUCT_SPECIFICATIONS[prod]
+                            slope = spec["slope"]
+                            intercept = spec["intercept"]
+                            water_per_mm = slope * SUSPENSION_KG + intercept
+                            pressed = spec["pressed_thickness_mm"]
+                            water_per_plate = (water_per_mm * pressed) / 1000
+                            water_per_m3_calc = water_per_plate / spec["volume_m3"]
+                
+                            prod_water = float(product_summary_for_water.loc[product_summary_for_water["Produkt"] == prod, "Water_kg"])
+                            prod_volume = float(product_summary_for_water.loc[product_summary_for_water["Produkt"] == prod, "Volume_m3"])
+                
+                            water_breakdown.append({
+                                "Product": prod,
+                                "Formula": spec["formula"],
+                                "Water/mm (g)": round(water_per_mm, 1),
+                                "Water/Plate (kg)": round(water_per_plate, 3),
+                                "Water/m³ (kg/m³)": round(water_per_m3_calc, 1),
+                                "Volume (m³)": round(prod_volume, 1),
+                                "Total Water (kg)": round(prod_water, 0),
+                            })
+                
+                    if water_breakdown:
+                        st.dataframe(pd.DataFrame(water_breakdown), use_container_width=True)
+                
+                    # ------------------------------------------------------------
+                    # KPI FORMULAS
+                    # ------------------------------------------------------------
+                    st.markdown("---")
+                    st.markdown("## 📊 Efficiency KPIs")
+                
+                    col_k1, col_k2 = st.columns(2)
+                
+                    with col_k1:
+                        st.markdown("### 🔥 kWh per kg Water")
+                        st.code(f"""
+                kWh/kg = Total Energy / Total Water
+                       = {total_energy:,.0f} / {total_water:,.0f}
+                       = {avg_kwh_per_kg:.3f} kWh/kg
+                """, language="text")
+                
+                    with col_k2:
+                        st.markdown("### 📦 kWh per m³")
+                        st.code(f"""
+                kWh/m³ = Total Energy / Total Volume
+                       = {total_energy:,.0f} / {total_volume:,.1f}
+                       = {avg_kwh_per_m3:.1f} kWh/m³
+                """, language="text")
+                
+                    # ------------------------------------------------------------
+                    # CONSISTENCY CHECK
+                    # ------------------------------------------------------------
+                    st.markdown("---")
+                    st.markdown("## 🔗 Relationship Check")
+                
+                    calculated_kwh_m3 = avg_kwh_per_kg * avg_water_per_m3
+                    diff = abs(calculated_kwh_m3 - avg_kwh_per_m3)
+                
+                    st.code(f"""
+                kWh/m³ ≈ kWh/kg × Water/m³
+                       = {avg_kwh_per_kg:.3f} × {avg_water_per_m3:.1f}
+                       = {calculated_kwh_m3:.1f} kWh/m³
+                
+                Actual: {avg_kwh_per_m3:.1f} kWh/m³
+                Difference: {diff:.1f} kWh/m³
+                """, language="text")
+                
+                    # ------------------------------------------------------------
+                    # DATA SOURCES
+                    # ------------------------------------------------------------
+                    st.markdown("---")
+                    st.markdown("## 📚 Data Sources Summary")
+                
+                    src_df = pd.DataFrame({
+                        "KPI": [
+                            "Thermal Energy", "Electrical Energy", "Total Volume",
+                            "Water Evaporated", "kWh/kg water", "kWh/m³"
+                        ],
+                        "Source": [
+                            "Energy (hourly)",
+                            "Energy (hourly)",
+                            "Wagon tracking",
+                            "Calculated",
+                            "Calculated",
+                            "Calculated"
+                        ],
+                        "Calculation": [
+                            "Σ(Gas × 11.5 kWh/m³)",
+                            "Σ(Electricity kWh)",
+                            "Σ(m³ from wagons)",
+                            "Σ(Volume × Water/m³ formula)",
+                            "Energy / Water",
+                            "Energy / Volume"
+                        ]
+                    })
+                
+                    st.dataframe(src_df, use_container_width=True)
+                
+                    st.success("✅ All Summary KPI calculations are properly documented and validated.")
+
+            
             
             # ===== VOLUME BREAKDOWN & VALIDATION =====
             with st.expander("📊 Volume Breakdown & Validation"):
@@ -1594,6 +1499,7 @@ Verification:
         st.error(f"❌ Display error: {e}")
         with st.expander("Details"):
             st.exception(e)
+
 
 
 
