@@ -323,32 +323,53 @@ def parse_wagon(df: pd.DataFrame) -> pd.DataFrame:
     else:
         df["Produkt"] = "Unknown"
 
-    # ✅ NEW: Calculate volume based on 214 plates per wagon
-    PLATES_PER_WAGON = 214
-    
-    def calculate_wagon_volume(row):
-        """Calculate wagon volume based on product specifications."""
-        product = row.get("Produkt", "Unknown")
+    # ✅ SIMPLIFIED: Use known volume per wagon for each product type
+    # Volume per wagon = 234 plates × volume per plate (from specifications)
+    def get_wagon_volume(product):
+        """Get volume for one wagon based on product type."""
         if product in PRODUCT_SPECIFICATIONS:
-            # Volume = number of plates × volume per plate
-            volume_per_plate = PRODUCT_SPECIFICATIONS[product]["volume_m3"]
-            return PLATES_PER_WAGON * volume_per_plate
+            spec = PRODUCT_SPECIFICATIONS[product]
+            # Calculate: 234 plates × area × thickness
+            edge_m = spec["edge_length_mm"] / 1000.0  # 0.602 m
+            thick_m = spec["final_thickness_mm"] / 1000.0
+            volume_per_plate = edge_m * edge_m * thick_m
+            volume_per_wagon = PLATES_PER_WAGON * volume_per_plate
+            return volume_per_wagon
         else:
-            # Fallback: use thickness-based calculation if product unknown
-            thick = pd.to_numeric(row.get("Stärke", 36), errors="coerce")
-            if pd.isna(thick):
-                thick = 36  # default
-            return 0.605 * 0.605 * (thick + 7) / 1000.0 * PLATES_PER_WAGON
+            # Fallback for unknown products
+            logger.warning(f"Unknown product: {product}, using default volume")
+            return 3.0  # default ~3 m³
     
-    df["m3"] = df.apply(calculate_wagon_volume, axis=1)
+    # Simply map each wagon to its product's standard volume
+    df["m3"] = df["Produkt"].apply(get_wagon_volume)
     
-    # Log volume statistics
-    logger.info(f"Volume calculation: {PLATES_PER_WAGON} plates per wagon")
-    for product in df["Produkt"].unique():
-        if product in PRODUCT_SPECIFICATIONS:
-            vol = PRODUCT_SPECIFICATIONS[product]["volume_m3"] * PLATES_PER_WAGON
-            logger.info(f"  {product}: {vol:.3f} m³/wagon ({PLATES_PER_WAGON} × {PRODUCT_SPECIFICATIONS[product]['volume_m3']:.4f} m³/plate)")
+    # Log the wagon count and volume by product
+    logger.info(f"\n{'='*60}")
+    logger.info(f"WAGON & VOLUME SUMMARY ({PLATES_PER_WAGON} plates/wagon)")
+    logger.info(f"{'='*60}")
+    
+    product_summary = df.groupby("Produkt").agg({
+        "WG_Nr": "count",
+        "m3": "first"  # Volume per wagon (same for all wagons of same product)
+    }).rename(columns={"WG_Nr": "Wagon_Count", "m3": "Volume_per_Wagon"})
+    
+    product_summary["Total_Volume"] = product_summary["Wagon_Count"] * product_summary["Volume_per_Wagon"]
+    product_summary = product_summary.sort_values("Total_Volume", ascending=False)
+    
+    for prod, row in product_summary.iterrows():
+        logger.info(
+            f"{prod:6s}: {row['Wagon_Count']:5.0f} wagons × {row['Volume_per_Wagon']:5.2f} m³/wagon = {row['Total_Volume']:8.1f} m³"
+        )
+    
+    total_wagons = product_summary["Wagon_Count"].sum()
+    total_volume = product_summary["Total_Volume"].sum()
+    avg_volume = total_volume / total_wagons if total_wagons > 0 else 0
+    
+    logger.info(f"{'='*60}")
+    logger.info(f"TOTAL: {total_wagons:,} wagons = {total_volume:,.1f} m³ (avg {avg_volume:.2f} m³/wagon)")
+    logger.info(f"{'='*60}\n")
 
+    # Rest of the parsing remains the same...
     for z in ("Z2", "Z3", "Z4", "Z5"):
         col = f"In {z}"
         df[f"{z}_in"] = (
@@ -735,6 +756,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
