@@ -21,7 +21,7 @@ CONFIG = {
     "gas_to_kwh": 11.5,
     "zones_seq": ["Z1", "Z2", "Z3", "Z4", "Z5"],
     "num_thermal_zones": 4,
-    "PLATES_PER_WAGON" : 234,
+    "PLATES_PER_WAGON": 234,
 }
 
 ZONE_ENERGY_MAPPING = {
@@ -735,5 +735,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
