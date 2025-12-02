@@ -189,15 +189,8 @@ def run_analysis(energy_path: str, wagon_path: str, products_filter, month_filte
         
         status.text(f"📊 Total volume: {total_volume_raw:,.0f} m³ from {total_wagons:,} wagons")
         
-        # Validate volume range
-        if total_volume_raw < 12000 or total_volume_raw > 15000:
-            st.warning(
-                f"⚠️ **Volume Check:** Total volume is {total_volume_raw:,.0f} m³. "
-                f"Expected range: 12,000-15,000 m³. "
-                f"This might indicate data quality issues or unusual production period."
-            )
-        else:
-            st.success(f"✅ **Volume Validated:** {total_volume_raw:,.0f} m³ (within expected range 12,000-15,000 m³)")
+        
+        
         if month_filter:
             e = e[e["Month"] == month_filter]
             w = w[w["Month"] == month_filter]
@@ -1290,6 +1283,7 @@ if st.session_state.analysis_complete and st.session_state.results:
         st.error(f"❌ Display error: {e}")
         with st.expander("Details"):
             st.exception(e)
+
 
 
 
