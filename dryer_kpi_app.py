@@ -615,25 +615,25 @@ if st.session_state.analysis_complete and st.session_state.results:
             
             # ===== VOLUME BREAKDOWN & VALIDATION =====
                 with st.expander("📊 Volume Breakdown & Validation"):
-                st.subheader("Volume Statistics")
-                
-                # Overall statistics
-                col_v1, col_v2, col_v3, col_v4 = st.columns(4)
-                
-                total_wagons_filtered = len(results["wagons"])
-                total_volume_filtered = results["wagons"]["m3"].sum()
-                avg_volume_wagon = results["wagons"]["m3"].mean()
-                
-                with col_v1:
-                    st.metric("Total Wagons", f"{total_wagons_filtered:,}")
-                with col_v2:
-                    st.metric("Total Volume", f"{total_volume_filtered:,.0f} m³")
-                with col_v3:
-                    st.metric("Avg Volume/Wagon", f"{avg_volume_wagon:.2f} m³")
-                with col_v4:
-                    expected_range = "12,000-15,000 m³"
-                    in_range = 12000 <= total_volume_filtered <= 15000
-                    st.metric("Status", "✅ In Range" if in_range else "⚠️ Out of Range")
+                    st.subheader("Volume Statistics")
+                    
+                    # Overall statistics
+                    col_v1, col_v2, col_v3, col_v4 = st.columns(4)
+                    
+                    total_wagons_filtered = len(results["wagons"])
+                    total_volume_filtered = results["wagons"]["m3"].sum()
+                    avg_volume_wagon = results["wagons"]["m3"].mean()
+                    
+                    with col_v1:
+                        st.metric("Total Wagons", f"{total_wagons_filtered:,}")
+                    with col_v2:
+                        st.metric("Total Volume", f"{total_volume_filtered:,.0f} m³")
+                    with col_v3:
+                        st.metric("Avg Volume/Wagon", f"{avg_volume_wagon:.2f} m³")
+                    with col_v4:
+                        expected_range = "12,000-15,000 m³"
+                        in_range = 12000 <= total_volume_filtered <= 15000
+                        st.metric("Status", "✅ In Range" if in_range else "⚠️ Out of Range")
                 
                 # Volume by product
                 st.subheader("Volume by Product")
@@ -1499,6 +1499,7 @@ if st.session_state.analysis_complete and st.session_state.results:
         st.error(f"❌ Display error: {e}")
         with st.expander("Details"):
             st.exception(e)
+
 
 
 
