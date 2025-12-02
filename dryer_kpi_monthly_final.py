@@ -322,11 +322,31 @@ def parse_wagon(df: pd.DataFrame) -> pd.DataFrame:
     else:
         df["Produkt"] = "Unknown"
 
-    if "m³" in df.columns:
-        df["m3"] = pd.to_numeric(df["m³"], errors="coerce")
-    else:
-        thick = pd.to_numeric(df.get("Stärke", 0), errors="coerce")
-        df["m3"] = 0.605 * 0.605 * (thick + 7) / 1000.0
+    # ✅ NEW: Calculate volume based on 214 plates per wagon
+    PLATES_PER_WAGON = 214
+    
+    def calculate_wagon_volume(row):
+        """Calculate wagon volume based on product specifications."""
+        product = row.get("Produkt", "Unknown")
+        if product in PRODUCT_SPECIFICATIONS:
+            # Volume = number of plates × volume per plate
+            volume_per_plate = PRODUCT_SPECIFICATIONS[product]["volume_m3"]
+            return PLATES_PER_WAGON * volume_per_plate
+        else:
+            # Fallback: use thickness-based calculation if product unknown
+            thick = pd.to_numeric(row.get("Stärke", 36), errors="coerce")
+            if pd.isna(thick):
+                thick = 36  # default
+            return 0.605 * 0.605 * (thick + 7) / 1000.0 * PLATES_PER_WAGON
+    
+    df["m3"] = df.apply(calculate_wagon_volume, axis=1)
+    
+    # Log volume statistics
+    logger.info(f"Volume calculation: {PLATES_PER_WAGON} plates per wagon")
+    for product in df["Produkt"].unique():
+        if product in PRODUCT_SPECIFICATIONS:
+            vol = PRODUCT_SPECIFICATIONS[product]["volume_m3"] * PLATES_PER_WAGON
+            logger.info(f"  {product}: {vol:.3f} m³/wagon ({PLATES_PER_WAGON} × {PRODUCT_SPECIFICATIONS[product]['volume_m3']:.4f} m³/plate)")
 
     for z in ("Z2", "Z3", "Z4", "Z5"):
         col = f"In {z}"
@@ -714,3 +734,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
