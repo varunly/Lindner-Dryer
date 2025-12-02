@@ -768,111 +768,7 @@ if st.session_state.analysis_complete and st.session_state.results:
                 """, language="text")
                 
                 # ===== STEP 4: VALIDATION =====
-                st.markdown("---")
-                st.markdown("### ✅ Schritt 4: Validierung & Energiebilanz")
-                
-                if "energy" in results and not results["energy"].empty:
-                    # Calculate differences
-                    energy_difference = abs(allocated_total - input_total_energy)
-                    energy_efficiency = (allocated_total / input_total_energy * 100) if input_total_energy > 0 else 0
-                    
-                    thermal_difference = abs(allocated_thermal - input_thermal_total)
-                    electrical_difference = abs(allocated_electrical - input_electrical_total)
-                    
-                    col_v1, col_v2, col_v3 = st.columns(3)
-                    
-                    with col_v1:
-                        st.metric(
-                            "Eingabe → Zuordnung (Thermisch)", 
-                            f"{energy_efficiency:.2f}%",
-                            delta=f"{thermal_difference:,.0f} kWh"
-                        )
-                    
-                    with col_v2:
-                        st.metric(
-                            "Eingabe → Zuordnung (Elektrisch)", 
-                            f"{energy_efficiency:.2f}%",
-                            delta=f"{electrical_difference:,.0f} kWh"
-                        )
-                    
-                    with col_v3:
-                        st.metric(
-                            "Eingabe → Zuordnung (Gesamt)", 
-                            f"{energy_efficiency:.2f}%",
-                            delta=f"{energy_difference:,.0f} kWh"
-                        )
-                    
-                    st.code(f"""
-            Energiebilanz-Prüfung:
-            
-            Eingabe (aus Energie-Datei):
-            - Thermisch:  {input_thermal_total:>15,.0f} kWh
-            - Elektrisch: {input_electrical_total:>15,.0f} kWh
-            - Gesamt:     {input_total_energy:>15,.0f} kWh
-            
-            Zugeordnet (allocate_energy):
-            - Thermisch:  {allocated_thermal:>15,.0f} kWh
-            - Elektrisch: {allocated_electrical:>15,.0f} kWh
-            - Gesamt:     {allocated_total:>15,.0f} kWh
-            
-            Differenz:
-            - Thermisch:  {thermal_difference:>15,.0f} kWh ({abs(thermal_difference/input_thermal_total*100) if input_thermal_total > 0 else 0:.2f}%)
-            - Elektrisch: {electrical_difference:>15,.0f} kWh ({abs(electrical_difference/input_electrical_total*100) if input_electrical_total > 0 else 0:.2f}%)
-            - Gesamt:     {energy_difference:>15,.0f} kWh ({abs(energy_difference/input_total_energy*100) if input_total_energy > 0 else 0:.2f}%)
-            
-            Zuordnungseffizienz: {energy_efficiency:.2f}%
-                    """, language="text")
-                    
-                    # Validation status
-                    if energy_efficiency > 99 and energy_efficiency < 101:
-                        st.success("✅ **Energiebilanz ist ausgeglichen!** Die zugeordnete Energie entspricht der Eingabeenergie (Toleranz < 1%).")
-                    elif energy_efficiency > 95 and energy_efficiency < 105:
-                        st.info(f"ℹ️ **Energiebilanz ist akzeptabel.** Zuordnungseffizienz: {energy_efficiency:.2f}% (Toleranz < 5%).")
-                    elif energy_efficiency < 90:
-                        st.warning(f"""
-            ⚠️ **Energie wird nicht vollständig zugeordnet!**
-            
-            Nur {energy_efficiency:.1f}% der Eingabeenergie wurde zugeordnet.
-            
-            Mögliche Gründe:
-            1. Einige Zeiträume in der Energie-Datei haben keine überlappenden Wagen
-            2. Produktfilter haben zu viele Wagen ausgeschlossen
-            3. Wagen-Zeitstempel liegen außerhalb des Energie-Zeitraums
-            4. Fehlende oder unvollständige Zoneneintrittszeiten
-                        """)
-                    elif energy_efficiency > 110:
-                        st.error(f"""
-            ❌ **FEHLER: Energie wird mehrfach gezählt!**
-            
-            {energy_efficiency:.1f}% der Eingabeenergie wurden zugeordnet (>100%).
-            
-            Dies deutet auf einen Fehler in der Zuordnungslogik hin:
-            - Möglicherweise werden Zeitintervalle doppelt gezählt
-            - Überlappungsberechnung könnte fehlerhaft sein
-                        """)
-                    
-                    # Show monthly validation
-                    if "summary" in results and not results["summary"].empty:
-                        monthly_validation = summary.groupby("Month", as_index=False).agg({
-                            "Energy_kWh": "sum"
-                        })
-                        
-                        monthly_input = energy_df.groupby("Month", as_index=False).agg({
-                            "E_thermal_total_kWh": "sum",
-                            "E_el_kWh": "sum"
-                        })
-                        monthly_input["Input_total"] = monthly_input["E_thermal_total_kWh"] + monthly_input["E_el_kWh"]
-                        
-                        monthly_compare = monthly_validation.merge(monthly_input[["Month", "Input_total"]], on="Month", how="left")
-                        monthly_compare["Effizienz (%)"] = (monthly_compare["Energy_kWh"] / monthly_compare["Input_total"] * 100).round(1)
-                        monthly_compare = monthly_compare.rename(columns={
-                            "Month": "Monat",
-                            "Energy_kWh": "Zugeordnet (kWh)",
-                            "Input_total": "Eingabe (kWh)"
-                        })
-                        
-                        st.markdown("**Monatliche Energiebilanz:**")
-                        st.dataframe(monthly_compare.round(0), use_container_width=True, hide_index=True)
+                #
                 
                 # ===== STEP 5: SUMMARY CALCULATION =====
                 st.markdown("---")
@@ -2045,5 +1941,6 @@ Difference: {abs(calculated_kwh_m3 - avg_kwh_per_m3):.1f} kWh/m³
         st.error(f"❌ Display error: {e}")
         with st.expander("Details"):
             st.exception(e)
+
 
 
