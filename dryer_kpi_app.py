@@ -1,4 +1,3 @@
-
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -100,10 +99,12 @@ with st.sidebar:
     energy_file = st.file_uploader(
         "📊 Energy File (.xlsx)",
         type=["xlsx"],
+        key="energy_uploader"
     )
     wagon_file = st.file_uploader(
         "🚛 Hordenwagen File (.xlsm, .xlsx)",
         type=["xlsm", "xlsx"],
+        key="wagon_uploader"
     )
 
     st.markdown("---")
@@ -154,6 +155,58 @@ def create_excel_download(results: dict) -> BytesIO:
     return output
 
 
+def save_uploaded_file(uploaded_file, suffix: str) -> str:
+    """
+    Safely save uploaded file to temporary location.
+    Returns the path to the temporary file.
+    """
+    try:
+        # Reset file pointer to beginning
+        uploaded_file.seek(0)
+        
+        # Read all bytes
+        file_bytes = uploaded_file.read()
+        
+        # Validate file is not empty
+        if len(file_bytes) == 0:
+            raise ValueError(f"Uploaded file '{uploaded_file.name}' is empty")
+        
+        # Validate it looks like a ZIP file (xlsx/xlsm are ZIP-based)
+        if not file_bytes[:4] == b'PK\x03\x04':
+            raise ValueError(
+                f"File '{uploaded_file.name}' does not appear to be a valid Excel file. "
+                f"Please ensure the file is not corrupted."
+            )
+        
+        # Create temporary file
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_file:
+            tmp_file.write(file_bytes)
+            tmp_path = tmp_file.name
+        
+        # Verify file was written correctly
+        if os.path.getsize(tmp_path) != len(file_bytes):
+            raise ValueError("File was not written correctly to temporary storage")
+        
+        return tmp_path
+        
+    except Exception as e:
+        raise ValueError(f"Error saving uploaded file: {e}")
+
+
+def validate_excel_file(file_path: str, file_description: str) -> bool:
+    """
+    Validate that an Excel file can be opened.
+    """
+    try:
+        # Try to open with openpyxl to validate
+        import openpyxl
+        wb = openpyxl.load_workbook(file_path, read_only=True, data_only=True)
+        wb.close()
+        return True
+    except Exception as e:
+        raise ValueError(f"Cannot read {file_description}: {e}")
+
+
 def run_analysis(energy_path: str, wagon_path: str, products_filter, month_filter) -> dict:
     progress = st.progress(0)
     status = st.empty()
@@ -161,18 +214,28 @@ def run_analysis(energy_path: str, wagon_path: str, products_filter, month_filte
     try:
         status.text("🔄 Parsing energy data...")
         progress.progress(15)
-        e_raw = pd.read_excel(energy_path, sheet_name=CONFIG["energy_sheet"])
+        
+        try:
+            e_raw = pd.read_excel(energy_path, sheet_name=CONFIG["energy_sheet"])
+        except Exception as e:
+            raise ValueError(f"Cannot read energy file: {e}")
+        
         e = parse_energy(e_raw)
         if e.empty:
             raise ValueError("Parsed energy data is empty.")
 
         status.text("🔄 Parsing wagon tracking data...")
         progress.progress(35)
-        w_raw = pd.read_excel(
-            wagon_path,
-            sheet_name=CONFIG["wagon_sheet"],
-            header=CONFIG["wagon_header_row"],
-        )
+        
+        try:
+            w_raw = pd.read_excel(
+                wagon_path,
+                sheet_name=CONFIG["wagon_sheet"],
+                header=CONFIG["wagon_header_row"],
+            )
+        except Exception as e:
+            raise ValueError(f"Cannot read wagon file: {e}")
+        
         w = parse_wagon(w_raw)
         if w.empty:
             raise ValueError("Parsed wagon data is empty.")
@@ -338,14 +401,24 @@ if run_button:
     else:
         tmp_e = tmp_w = None
         try:
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as f_e:
-                f_e.write(energy_file.read())
-                tmp_e = f_e.name
-
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsm") as f_w:
-                f_w.write(wagon_file.read())
-                tmp_w = f_w.name
-
+            # Display file info for debugging
+            st.info(f"📄 Energy file: {energy_file.name} ({energy_file.size:,} bytes)")
+            st.info(f"📄 Wagon file: {wagon_file.name} ({wagon_file.size:,} bytes)")
+            
+            # Save files safely
+            with st.spinner("📁 Saving uploaded files..."):
+                tmp_e = save_uploaded_file(energy_file, ".xlsx")
+                
+                # Determine suffix based on file extension
+                wagon_suffix = ".xlsm" if wagon_file.name.endswith(".xlsm") else ".xlsx"
+                tmp_w = save_uploaded_file(wagon_file, wagon_suffix)
+            
+            # Validate files can be opened
+            with st.spinner("🔍 Validating Excel files..."):
+                validate_excel_file(tmp_e, "Energy file")
+                validate_excel_file(tmp_w, "Wagon file")
+            
+            # Run analysis
             results = run_analysis(
                 tmp_e,
                 tmp_w,
@@ -355,6 +428,18 @@ if run_button:
             st.session_state.results = results
             st.session_state.analysis_complete = True
 
+        except ValueError as ve:
+            st.error(f"⚠️ Validation Error: {ve}")
+            st.warning(
+                "💡 **Troubleshooting Tips:**\n"
+                "1. Try re-downloading the original Excel file\n"
+                "2. Open and re-save the file in Excel\n"
+                "3. Ensure the file is not password protected\n"
+                "4. Check if the file opens correctly on your computer"
+            )
+            st.session_state.results = None
+            st.session_state.analysis_complete = False
+            
         except Exception as err:
             st.error(f"❌ Error during analysis: {err}")
             with st.expander("🔍 View Error Details"):
@@ -363,11 +448,12 @@ if run_button:
             st.session_state.analysis_complete = False
 
         finally:
+            # Clean up temporary files
             for p in (tmp_e, tmp_w):
                 if p and os.path.exists(p):
                     try:
                         os.unlink(p)
-                    except:
+                    except Exception:
                         pass
 
 # ---------------------------------------------------------
@@ -388,7 +474,7 @@ if st.session_state.analysis_complete and st.session_state.results:
             total_electrical = float(yearly["Energy_electrical_kWh"].sum())
             total_energy = float(yearly["Energy_kWh"].sum())
 
-            # ===== CORRECT VOLUME: FROM WAGONS, NOT YEARLY (AVOIDS MULTIPLICATION BY ZONES) =====
+            # ===== CORRECT VOLUME: FROM WAGONS =====
             total_volume = float(results["wagons"]["m3"].sum())
 
             # ===== WATER CALCULATION =====
@@ -468,9 +554,7 @@ if st.session_state.analysis_complete and st.session_state.results:
                 This explains data sources and formulas used to compute the KPIs above.
                 """)
 
-                # ------------------------------------------------------------
                 # ENERGY SECTION
-                # ------------------------------------------------------------
                 st.markdown("---")
                 st.markdown("## ⚡ Energy Consumption")
 
@@ -504,9 +588,7 @@ Total Energy = Thermal + Electrical
              = {total_energy:,.0f} kWh
 """, language="text")
 
-                # ------------------------------------------------------------
                 # VOLUME SECTION
-                # ------------------------------------------------------------
                 st.markdown("---")
                 st.markdown("## 📦 Volume Calculation")
 
@@ -530,15 +612,12 @@ Wagons counted = {total_wagons}
 Average per wagon = {avg_water_per_m3:.2f} kg/m³ water
 """, language="text")
 
-                # ------------------------------------------------------------
                 # WATER SECTION
-                # ------------------------------------------------------------
                 st.markdown("---")
                 st.markdown("## 💧 Water Evaporation Calculation")
 
                 st.markdown(f"Suspension mass: **{SUSPENSION_KG} kg**")
 
-                # WATER BREAKDOWN TABLE
                 water_breakdown = []
                 for prod in product_summary_for_water["Produkt"]:
                     if prod in PRODUCT_SPECIFICATIONS:
@@ -574,9 +653,7 @@ Average per wagon = {avg_water_per_m3:.2f} kg/m³ water
                 if water_breakdown:
                     st.dataframe(pd.DataFrame(water_breakdown), use_container_width=True)
 
-                # ------------------------------------------------------------
                 # KPI FORMULAS
-                # ------------------------------------------------------------
                 st.markdown("---")
                 st.markdown("## 📊 Efficiency KPIs")
 
@@ -598,9 +675,7 @@ kWh/m³ = Total Energy / Total Volume
        = {avg_kwh_per_m3:.1f} kWh/m³
 """, language="text")
 
-                # ------------------------------------------------------------
                 # CONSISTENCY CHECK
-                # ------------------------------------------------------------
                 st.markdown("---")
                 st.markdown("## 🔗 Relationship Check")
 
@@ -616,9 +691,7 @@ Actual: {avg_kwh_per_m3:.1f} kWh/m³
 Difference: {diff:.1f} kWh/m³
 """, language="text")
 
-                # ------------------------------------------------------------
                 # DATA SOURCES
-                # ------------------------------------------------------------
                 st.markdown("---")
                 st.markdown("## 📚 Data Sources Summary")
 
@@ -653,7 +726,6 @@ Difference: {diff:.1f} kWh/m³
             with st.expander("📊 Volume Breakdown & Validation"):
                 st.subheader("Volume Statistics")
 
-                # Overall statistics
                 col_v1, col_v2, col_v3, col_v4 = st.columns(4)
 
                 total_wagons_filtered = len(results["wagons"])
@@ -667,7 +739,6 @@ Difference: {diff:.1f} kWh/m³
                 with col_v3:
                     st.metric("Avg Volume/Wagon", f"{avg_volume_wagon:.2f} m³")
                 with col_v4:
-                    expected_range = "12,000-15,000 m³"
                     in_range = 12000 <= total_volume_filtered <= 15000
                     st.metric("Status", "✅ In Range" if in_range else "⚠️ Out of Range")
 
@@ -678,8 +749,6 @@ Difference: {diff:.1f} kWh/m³
                 }).round(2)
                 vol_by_product.columns = ["Total (m³)", "Avg/Wagon (m³)", "Wagon Count"]
                 vol_by_product = vol_by_product.sort_values("Total (m³)", ascending=False)
-
-                # Add percentage
                 vol_by_product["% of Total"] = (
                     vol_by_product["Total (m³)"] / total_volume_filtered * 100
                 ).round(1)
@@ -706,13 +775,10 @@ Difference: {diff:.1f} kWh/m³
                 for prod in results["wagons"]["Produkt"].unique():
                     if prod in PRODUCT_SPECIFICATIONS:
                         spec = PRODUCT_SPECIFICATIONS[prod]
-
-                        # Theoretical volume
                         edge_m = spec["edge_length_mm"] / 1000.0
                         thick_m = spec["final_thickness_mm"] / 1000.0
                         vol_theoretical = 234 * edge_m * edge_m * thick_m
 
-                        # Actual volume
                         actual_vols = results["wagons"][results["wagons"]["Produkt"] == prod]["m3"]
                         vol_actual = actual_vols.mean()
 
@@ -731,7 +797,6 @@ Difference: {diff:.1f} kWh/m³
                 comparison_df = pd.DataFrame(comparison_data)
                 st.dataframe(comparison_df, use_container_width=True)
 
-                # Flag large discrepancies
                 large_diff = comparison_df[abs(comparison_df["Difference (%)"]) > 10]
                 if not large_diff.empty:
                     st.warning(
@@ -742,7 +807,6 @@ Difference: {diff:.1f} kWh/m³
             # ===== 2. ZONE COMPARISON =====
             st.markdown('<div class="section-header">📉 Zone Comparison</div>', unsafe_allow_html=True)
 
-            # Aggregate by zone only
             zone_totals = yearly.groupby("Zone", as_index=False).agg({
                 "Energy_thermal_kWh": "sum",
                 "Energy_electrical_kWh": "sum",
@@ -759,7 +823,6 @@ Difference: {diff:.1f} kWh/m³
             col_z1, col_z2 = st.columns(2)
 
             with col_z1:
-                # Stacked bar: Thermal + Electrical by Zone
                 fig_zone_energy = go.Figure()
                 fig_zone_energy.add_trace(go.Bar(
                     name='Thermal (Gas)',
@@ -787,7 +850,6 @@ Difference: {diff:.1f} kWh/m³
                 st.plotly_chart(fig_zone_energy, use_container_width=True)
 
             with col_z2:
-                # Pie chart: Energy distribution
                 fig_pie = px.pie(
                     zone_totals,
                     values="Energy_kWh",
@@ -799,7 +861,6 @@ Difference: {diff:.1f} kWh/m³
                 fig_pie.update_layout(height=400)
                 st.plotly_chart(fig_pie, use_container_width=True)
 
-            # Zone summary table
             st.subheader("Zone Energy Summary")
             zone_display = zone_totals.copy()
             zone_display["Thermal %"] = (
@@ -824,8 +885,7 @@ Difference: {diff:.1f} kWh/m³
                 unsafe_allow_html=True
             )
 
-            # Prepare aggregated data for different views
-            # 1. By Product (across all zones)
+            # By Product
             monthly_product = summary.groupby(["Month", "Produkt"], as_index=False).agg({
                 "Energy_thermal_kWh": "sum",
                 "Energy_electrical_kWh": "sum",
@@ -843,7 +903,7 @@ Difference: {diff:.1f} kWh/m³
                 monthly_product["Energy_thermal_kWh"], monthly_product["Volume_m3"]
             )
 
-            # 2. By Zone (across all products)
+            # By Zone
             monthly_zone = summary.groupby(["Month", "Zone"], as_index=False).agg({
                 "Energy_thermal_kWh": "sum",
                 "Energy_electrical_kWh": "sum",
@@ -861,7 +921,7 @@ Difference: {diff:.1f} kWh/m³
                 monthly_zone["Energy_thermal_kWh"], monthly_zone["Volume_m3"]
             )
 
-            # 3. Overall (total across everything)
+            # Overall
             monthly_overall = summary.groupby(["Month"], as_index=False).agg({
                 "Energy_thermal_kWh": "sum",
                 "Energy_electrical_kWh": "sum",
@@ -882,21 +942,17 @@ Difference: {diff:.1f} kWh/m³
                 safe_divide(monthly_overall["Energy_thermal_kWh"], monthly_overall["Energy_kWh"]) * 100
             )
 
-            # 4. Weekly data (from energy data if available)
+            # Weekly data
             weekly_energy = None
             if "energy" in results and not results["energy"].empty:
                 energy_df = results["energy"].copy()
                 energy_df["Week"] = energy_df["E_start"].dt.isocalendar().week
                 energy_df["Year"] = energy_df["E_start"].dt.year
 
-                # Check which columns exist and aggregate accordingly
                 agg_dict = {}
-
-                # Check for thermal total column
                 if "E_thermal_total_kWh" in energy_df.columns:
                     agg_dict["E_thermal_total_kWh"] = "sum"
                 else:
-                    # If total doesn't exist, sum individual zone thermal columns
                     thermal_cols = [
                         col for col in energy_df.columns
                         if col.startswith("E_thermal_") and col.endswith("_kWh")
@@ -904,14 +960,12 @@ Difference: {diff:.1f} kWh/m³
                     for col in thermal_cols:
                         agg_dict[col] = "sum"
 
-                # Electrical column
                 if "E_el_kWh" in energy_df.columns:
                     agg_dict["E_el_kWh"] = "sum"
 
                 if agg_dict:
                     weekly_energy = energy_df.groupby(["Year", "Week"], as_index=False).agg(agg_dict)
 
-                    # Calculate total thermal if we have individual zone columns
                     if "E_thermal_total_kWh" not in weekly_energy.columns:
                         thermal_cols = [
                             col for col in weekly_energy.columns
@@ -922,7 +976,6 @@ Difference: {diff:.1f} kWh/m³
                         else:
                             weekly_energy["E_thermal_total_kWh"] = 0
 
-                    # Calculate total energy
                     weekly_energy["Total_kWh"] = (
                         weekly_energy.get("E_thermal_total_kWh", 0) +
                         weekly_energy.get("E_el_kWh", 0)
@@ -932,13 +985,12 @@ Difference: {diff:.1f} kWh/m³
                         weekly_energy["Week"].astype(str).str.zfill(2)
                     )
 
-            # ========== SECTION 1: OVERALL TRENDS ==========
+            # SECTION 1: OVERALL TRENDS
             st.subheader("📈 Overall Performance Trends")
 
             col_o3, col_o4 = st.columns(2)
 
             with col_o3:
-                # Monthly energy consumption (stacked)
                 fig_monthly_energy = go.Figure()
                 fig_monthly_energy.add_trace(go.Bar(
                     name='Thermal',
@@ -967,7 +1019,6 @@ Difference: {diff:.1f} kWh/m³
                 st.plotly_chart(fig_monthly_energy, use_container_width=True)
 
             with col_o4:
-                # Monthly production volume
                 fig_monthly_volume = px.bar(
                     monthly_overall,
                     x="Month",
@@ -980,11 +1031,10 @@ Difference: {diff:.1f} kWh/m³
                 fig_monthly_volume.update_layout(height=350, plot_bgcolor="white", showlegend=False)
                 st.plotly_chart(fig_monthly_volume, use_container_width=True)
 
-            # ========== SECTION 2: WEEKLY ENERGY CONSUMPTION ==========
+            # SECTION 2: WEEKLY ENERGY
             if weekly_energy is not None and not weekly_energy.empty:
                 st.subheader("📅 Weekly Energy Consumption")
 
-                # Ensure no negative values - clip to 0
                 if "E_thermal_total_kWh" in weekly_energy.columns:
                     weekly_energy["E_thermal_total_kWh"] = weekly_energy["E_thermal_total_kWh"].clip(lower=0)
                 if "E_el_kWh" in weekly_energy.columns:
@@ -994,10 +1044,8 @@ Difference: {diff:.1f} kWh/m³
                 col_w1, col_w2 = st.columns(2)
 
                 with col_w1:
-                    # Weekly total energy consumption
                     fig_weekly_total = go.Figure()
 
-                    # Properly handle column access
                     if "E_thermal_total_kWh" in weekly_energy.columns:
                         thermal_data = weekly_energy["E_thermal_total_kWh"].fillna(0).clip(lower=0)
                     else:
@@ -1008,7 +1056,6 @@ Difference: {diff:.1f} kWh/m³
                     else:
                         electrical_data = pd.Series([0] * len(weekly_energy), index=weekly_energy.index)
 
-                    # Add traces only if there's actual data
                     if thermal_data.sum() > 0:
                         fig_weekly_total.add_trace(go.Bar(
                             name='Thermal',
@@ -1042,7 +1089,6 @@ Difference: {diff:.1f} kWh/m³
                     st.plotly_chart(fig_weekly_total, use_container_width=True)
 
                 with col_w2:
-                    # Weekly trend line
                     total_data = weekly_energy["Total_kWh"].fillna(0).clip(lower=0)
 
                     fig_weekly_trend = px.line(
@@ -1069,7 +1115,6 @@ Difference: {diff:.1f} kWh/m³
                     )
                     st.plotly_chart(fig_weekly_trend, use_container_width=True)
 
-                # Weekly statistics (with validation)
                 valid_total = weekly_energy["Total_kWh"].clip(lower=0)
                 avg_weekly = valid_total.mean()
                 max_weekly = valid_total.max()
@@ -1084,21 +1129,10 @@ Difference: {diff:.1f} kWh/m³
                             f"Peak week: **{max_week}** ({max_weekly:,.0f} kWh) | "
                             f"Range: {min_weekly:,.0f} - {max_weekly:,.0f} kWh"
                         )
-                    else:
-                        st.info("📊 **Weekly Statistics:** Data available but no valid maximum found")
-
-                # Debug information (optional - remove in production)
-                with st.expander("🔍 Debug: Check Weekly Data"):
-                    st.write("Columns available:", list(weekly_energy.columns))
-                    st.write("Data preview:")
-                    st.dataframe(weekly_energy.head())
-                    st.write(f"Thermal sum: {thermal_data.sum():,.0f}")
-                    st.write(f"Electrical sum: {electrical_data.sum():,.0f}")
-                    st.write(f"Total sum: {valid_total.sum():,.0f}")
             else:
                 st.info("📅 Weekly energy data not available for the selected period")
 
-            # ========== SECTION 3: BY PRODUCT TRENDS ==========
+            # SECTION 3: BY PRODUCT TRENDS
             st.subheader("🧱 Trends by Product")
 
             col_p1, col_p2 = st.columns(2)
@@ -1157,7 +1191,7 @@ Difference: {diff:.1f} kWh/m³
                 fig_prod_volume.update_layout(height=350, plot_bgcolor="white")
                 st.plotly_chart(fig_prod_volume, use_container_width=True)
 
-            # ========== SECTION 4: BY ZONE TRENDS ==========
+            # SECTION 4: BY ZONE TRENDS
             st.subheader("🏭 Trends by Zone")
 
             col_z1, col_z2 = st.columns(2)
@@ -1256,7 +1290,6 @@ Difference: {diff:.1f} kWh/m³
                 col_p1, col_p2 = st.columns(2)
 
                 with col_p1:
-                    # Total Energy by Product (Thermal + Electrical stacked)
                     fig_prod_energy = go.Figure()
                     fig_prod_energy.add_trace(go.Bar(
                         name='Thermal (Gas)',
@@ -1285,7 +1318,6 @@ Difference: {diff:.1f} kWh/m³
                     st.plotly_chart(fig_prod_energy, use_container_width=True)
 
                 with col_p2:
-                    # Thermal Energy Consumed by Each Product (Horizontal Bar Chart)
                     prod_sorted = prod_agg.sort_values("Energy_thermal_kWh", ascending=True)
 
                     fig_thermal = go.Figure()
@@ -1312,7 +1344,6 @@ Difference: {diff:.1f} kWh/m³
                     )
                     st.plotly_chart(fig_thermal, use_container_width=True)
 
-                # Thermal energy distribution pie chart (centered)
                 col_pie1, col_pie2, col_pie3 = st.columns([1, 2, 1])
 
                 with col_pie2:
@@ -1327,10 +1358,8 @@ Difference: {diff:.1f} kWh/m³
                     fig_thermal_pie.update_layout(height=400)
                     st.plotly_chart(fig_thermal_pie, use_container_width=True)
 
-                # Product summary table
                 st.subheader("Product Energy Summary")
                 prod_display = prod_agg.copy()
-
                 prod_display = prod_display.rename(columns={
                     "Produkt": "Product",
                     "Energy_thermal_kWh": "Thermal (kWh)",
@@ -1344,16 +1373,13 @@ Difference: {diff:.1f} kWh/m³
                     "kWh_thermal_per_m3": "Thermal kWh/m³"
                 })
 
-                # Select and order columns for display
                 display_cols = [
                     "Product", "Thermal (kWh)", "Electrical (kWh)", "Total (kWh)",
                     "Thermal %", "Volume (m³)", "Water (kg)", "Thermal kWh/m³", "kWh/m³", "kWh/kg"
                 ]
                 display_cols = [c for c in display_cols if c in prod_display.columns]
-
                 st.dataframe(prod_display[display_cols], use_container_width=True, hide_index=True)
 
-                # Summary metrics for thermal energy
                 total_thermal_prod = prod_agg["Energy_thermal_kWh"].sum()
                 avg_thermal_per_product = prod_agg["Energy_thermal_kWh"].mean()
                 max_thermal_product = prod_agg.loc[prod_agg["Energy_thermal_kWh"].idxmax(), "Produkt"]
@@ -1365,7 +1391,7 @@ Difference: {diff:.1f} kWh/m³
                     f"Highest consumer: **{max_thermal_product}** ({max_thermal_value:,.0f} kWh)"
                 )
 
-            # ===== 4. PRODUCT SPECIFICATIONS (FORMULA-BASED) =====
+            # ===== 4. PRODUCT SPECIFICATIONS =====
             st.markdown(
                 '<div class="section-header">📐 Product Specifications (Formula-Based Calculations)</div>',
                 unsafe_allow_html=True
@@ -1376,7 +1402,6 @@ Difference: {diff:.1f} kWh/m³
 
             specs_data = []
             for prod, spec in PRODUCT_SPECIFICATIONS.items():
-                # Calculate using formula
                 slope = spec["slope"]
                 intercept = spec["intercept"]
                 water_per_mm_g = slope * SUSPENSION_KG + intercept
@@ -1385,7 +1410,6 @@ Difference: {diff:.1f} kWh/m³
                 water_per_m3_kg = water_per_plate_kg / spec["volume_m3"]
                 water_per_wagon_kg = water_per_plate_kg * PLATES_PER_WAGON
 
-                # Check if interpolated
                 is_interpolated = spec.get("interpolated", False)
                 formula_display = spec["formula"]
                 if is_interpolated:
@@ -1405,24 +1429,18 @@ Difference: {diff:.1f} kWh/m³
 
             specs_df = pd.DataFrame(specs_data)
             st.dataframe(specs_df, use_container_width=True, hide_index=True)
-
             st.info("⚠️ Products marked with ⚠️ are interpolated values")
 
-            # Comparison: Formula vs Measured
             st.subheader("Formula Calculation vs Measured Values")
 
             comparison_data = []
             for prod, spec in PRODUCT_SPECIFICATIONS.items():
-                # Formula calculation
                 slope = spec["slope"]
                 intercept = spec["intercept"]
                 water_per_mm_g_calc = slope * SUSPENSION_KG + intercept
                 water_per_plate_kg_calc = (water_per_mm_g_calc * spec["pressed_thickness_mm"]) / 1000.0
-
-                # Measured value
                 water_per_plate_kg_measured = spec["water_per_plate_kg"]
 
-                # Difference
                 difference = water_per_plate_kg_calc - water_per_plate_kg_measured
                 diff_pct = (
                     (difference / water_per_plate_kg_measured * 100)
@@ -1440,7 +1458,6 @@ Difference: {diff:.1f} kWh/m³
             comparison_df = pd.DataFrame(comparison_data)
             st.dataframe(comparison_df, use_container_width=True, hide_index=True)
 
-            # Check for large discrepancies
             large_diff = comparison_df[abs(comparison_df["Difference (%)"]) > 5]
             if not large_diff.empty:
                 st.warning(
@@ -1470,7 +1487,6 @@ Difference: {diff:.1f} kWh/m³
             wagon_stats = compute_product_wagon_stats(results["wagons"])
             wagon_capacity = wagon_stats.get("wagon_capacity_m3", {})
 
-            # Automatic baseline KPIs
             baseline_kwh_m3 = float(yearly["kWh_per_m3"].mean()) if len(yearly) > 0 else 0.0
             baseline_kwh_kg = float(yearly["kWh_per_kg"].mean()) if len(yearly) > 0 else 0.0
 
@@ -1621,6 +1637,3 @@ Difference: {diff:.1f} kWh/m³
         st.error(f"❌ Display error: {e}")
         with st.expander("Details"):
             st.exception(e)
-
-
-
