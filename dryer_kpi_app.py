@@ -394,8 +394,17 @@ if st.session_state.analysis_complete and st.session_state.results:
                 f"Electrical = **{electrical_pct:.1f}%** ({total_electrical:,.0f} kWh) | "
                 f"🚛 **Production:** {total_wagons:,} wagons | {total_volume:,.0f} m³ | "
                 f"💧 **Water:** {total_water:,.0f} kg ({total_water/1000:,.1f} tons) evaporated"
+            
             )
-                        # After Summary KPIs section, add this:
+            
+            # Row 4: Energy Intensity (per volume)
+            st.subheader("📦 Energy per Volume")
+            c9, c10 = st.columns(2)
+            with c9:
+                st.markdown(create_kpi_card("Total kWh/m³", avg_kwh_per_m3, "kWh/m³"), unsafe_allow_html=True)
+            with c10:
+                st.markdown(create_kpi_card("Thermal kWh/m³", avg_kwh_thermal_per_m3, "kWh/m³"), unsafe_allow_html=True)
+            # After Summary KPIs section, add this:
             
             # ===== VOLUME BREAKDOWN & VALIDATION =====
             with st.expander("📊 Volume Breakdown & Validation"):
@@ -1283,6 +1292,7 @@ if st.session_state.analysis_complete and st.session_state.results:
         st.error(f"❌ Display error: {e}")
         with st.expander("Details"):
             st.exception(e)
+
 
 
 
