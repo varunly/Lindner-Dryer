@@ -396,8 +396,19 @@ if st.session_state.analysis_complete and st.session_state.results:
                 f"💧 **Water:** {total_water:,.0f} kg ({total_water/1000:,.1f} tons) evaporated"
             
             )
-            
+            # Row 3: Energy Efficiency Metrics
+            st.subheader("📊 Energy Efficiency")
+            c7, c8, c9, c10 = st.columns(4)
+            with c7:
+                st.markdown(create_kpi_card("kWh/kg water", avg_kwh_per_kg, "kWh/kg"), unsafe_allow_html=True)
+            with c8:
+                st.markdown(create_kpi_card("Thermal kWh/kg", avg_kwh_thermal_per_kg, "kWh/kg"), unsafe_allow_html=True)
+            with c9:
+                st.markdown(create_kpi_card("kWh/m³", avg_kwh_per_m3, "kWh/m³"), unsafe_allow_html=True)
+            with c10:
+                st.markdown(create_kpi_card("Thermal kWh/m³", avg_kwh_thermal_per_m3, "kWh/m³"), unsafe_allow_html=True)
             # Row 4: Energy Intensity (per volume)
+            
             st.subheader("📦 Energy per Volume")
             c9, c10 = st.columns(2)
             with c9:
@@ -1292,6 +1303,7 @@ if st.session_state.analysis_complete and st.session_state.results:
         st.error(f"❌ Display error: {e}")
         with st.expander("Details"):
             st.exception(e)
+
 
 
 
