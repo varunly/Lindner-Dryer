@@ -1062,69 +1062,84 @@ if st.session_state.analysis_complete and st.session_state.results:
                 
 
             # ===== 4. PRODUCT SPECIFICATIONS (MEASURED VALUES) =====
-            st.markdown('<div class="section-header">📐 Product Specifications (MEASURED Values)</div>', unsafe_allow_html=True)
+                        # ===== PRODUCT SPECIFICATIONS (FORMULA-BASED) =====
+            st.markdown('<div class="section-header">📐 Product Specifications (Formula-Based Calculations)</div>', unsafe_allow_html=True)
             
-            st.write(f"**Formula:** Water/mm (g) = Slope × {SUSPENSION_KG}kg + Intercept | All values are **MEASURED** from production data")
+            st.write(f"**Formula:** Water/mm (g) = Slope × Suspension ({SUSPENSION_KG} kg) + Intercept")
+            st.write(f"**Then:** Water/Plate (kg) = [Water/mm (g) × Pressed Thickness (mm)] / 1000")
             
             specs_data = []
             for prod, spec in PRODUCT_SPECIFICATIONS.items():
+                # Calculate using formula
+                slope = spec["slope"]
+                intercept = spec["intercept"]
+                water_per_mm_g = slope * SUSPENSION_KG + intercept
+                pressed_thickness_mm = spec["pressed_thickness_mm"]
+                water_per_plate_kg = (water_per_mm_g * pressed_thickness_mm) / 1000.0
+                water_per_m3_kg = water_per_plate_kg / spec["volume_m3"]
+                water_per_wagon_kg = water_per_plate_kg * PLATES_PER_WAGON
+                
+                # Check if interpolated
+                is_interpolated = spec.get("interpolated", False)
+                formula_display = spec["formula"]
+                if is_interpolated:
+                    formula_display += " ⚠️"
+                
                 specs_data.append({
                     "Product": prod,
                     "Type": spec["product_type"],
-                    "Formula": spec["formula"],
-                    "Thickness (mm)": spec["pressed_thickness_mm"],
-                    "Water/mm (g)": spec["water_per_mm_g"],
-                    "Water/Plate (kg)": spec["water_per_plate_kg"],
-                    "Water/m³ (kg)": round(spec["water_per_m3_kg"], 1),
+                    "Formula": formula_display,
+                    "Suspension (kg)": SUSPENSION_KG,
+                    "Water/mm (g)": round(water_per_mm_g, 1),
+                    "Pressed Thickness (mm)": pressed_thickness_mm,
+                    "Water/Plate (kg)": round(water_per_plate_kg, 3),
+                    "Water/Wagon (kg)": round(water_per_wagon_kg, 1),
+                    "Water/m³ (kg/m³)": round(water_per_m3_kg, 1),
                 })
             
             specs_df = pd.DataFrame(specs_data)
             st.dataframe(specs_df, use_container_width=True, hide_index=True)
             
-            # Water curves
-            st.subheader("Water Evaporation Curves by Product")
+            st.info("⚠️ Products marked with ⚠️ are interpolated values")
             
-            products_to_plot = st.multiselect(
-                "Select products to compare:",
-                list(PRODUCT_SPECIFICATIONS.keys()),
-                default=["L36", "L38", "N40"],
-                key="curve_products"
-            )
+            # Comparison: Formula vs Measured
+            st.subheader("Formula Calculation vs Measured Values")
             
-            if products_to_plot:
-                all_curves = []
-                for prod in products_to_plot:
-                    curve_df = get_product_water_curve(prod)
-                    if curve_df is not None and not curve_df.empty:
-                        all_curves.append(curve_df)
+            comparison_data = []
+            for prod, spec in PRODUCT_SPECIFICATIONS.items():
+                # Formula calculation
+                slope = spec["slope"]
+                intercept = spec["intercept"]
+                water_per_mm_g_calc = slope * SUSPENSION_KG + intercept
+                water_per_plate_kg_calc = (water_per_mm_g_calc * spec["pressed_thickness_mm"]) / 1000.0
                 
-                if all_curves:
-                    combined_curves = pd.concat(all_curves, ignore_index=True)
-                    
-                    fig_curves = px.line(
-                        combined_curves,
-                        x="Pressed_Thickness_mm",
-                        y="Water_per_Plate_kg",
-                        color="Product",
-                        markers=True,
-                        title="Water Evaporation vs. Pressed Thickness",
-                        labels={"Pressed_Thickness_mm": "Pressed Thickness (mm)", "Water_per_Plate_kg": "Water per Plate (kg)"}
-                    )
-                    
-                    for prod in products_to_plot:
-                        if prod in PRODUCT_SPECIFICATIONS:
-                            spec = PRODUCT_SPECIFICATIONS[prod]
-                            fig_curves.add_scatter(
-                                x=[spec["pressed_thickness_mm"]],
-                                y=[spec["water_per_plate_kg"]],
-                                mode='markers',
-                                marker=dict(size=14, symbol='star'),
-                                name=f"{prod} (measured)"
-                            )
-                    
-                    fig_curves.update_layout(height=450, plot_bgcolor="white")
-                    st.plotly_chart(fig_curves, use_container_width=True)
-                    st.info("⭐ **Star markers** = MEASURED values from production data")
+                # Measured value
+                water_per_plate_kg_measured = spec["water_per_plate_kg"]
+                
+                # Difference
+                difference = water_per_plate_kg_calc - water_per_plate_kg_measured
+                diff_pct = (difference / water_per_plate_kg_measured * 100) if water_per_plate_kg_measured > 0 else 0
+                
+                comparison_data.append({
+                    "Product": prod,
+                    "Measured (kg)": round(water_per_plate_kg_measured, 3),
+                    "Calculated (kg)": round(water_per_plate_kg_calc, 3),
+                    "Difference (kg)": round(difference, 3),
+                    "Difference (%)": round(diff_pct, 1)
+                })
+            
+            comparison_df = pd.DataFrame(comparison_data)
+            st.dataframe(comparison_df, use_container_width=True, hide_index=True)
+            
+            # Check for large discrepancies
+            large_diff = comparison_df[abs(comparison_df["Difference (%)"]) > 5]
+            if not large_diff.empty:
+                st.warning(
+                    f"⚠️ **Discrepancies >5% found** for: {', '.join(large_diff['Product'].tolist())}. "
+                    f"This might indicate measurement errors or formula issues."
+                )
+            else:
+                st.success("✅ Formula calculations match measured values within 5%")
 
            
             # ===== 6. DATA TABLES =====
@@ -1279,6 +1294,7 @@ if st.session_state.analysis_complete and st.session_state.results:
         st.error(f"❌ Display error: {e}")
         with st.expander("Details"):
             st.exception(e)
+
 
 
 
