@@ -358,7 +358,90 @@ def run_analysis(energy_path: str, wagon_path: str, products_filter, month_filte
         progress.empty()
         status.empty()
 
+# Add this right after "Analysis complete!" section:
 
+st.markdown("---")
+st.markdown("### 🔧 DIAGNOSTIC REPORT")
+
+# 1. Energy Check
+input_thermal = results["energy"]["E_thermal_total_kWh"].sum()
+input_electrical = results["energy"]["E_el_kWh"].sum()
+input_total = input_thermal + input_electrical
+
+allocated_total = results["summary"]["Energy_kWh"].sum()
+energy_efficiency = (allocated_total / input_total * 100) if input_total > 0 else 0
+
+st.write(f"**Energy Allocation:**")
+st.write(f"- Input: {input_total:,.0f} kWh")
+st.write(f"- Allocated: {allocated_total:,.0f} kWh")
+st.write(f"- Efficiency: {energy_efficiency:.1f}%")
+
+if energy_efficiency < 90:
+    st.warning(f"⚠️ Only {energy_efficiency:.1f}% of energy is allocated!")
+elif energy_efficiency > 105:
+    st.error("❌ Energy allocated > input! Double-counting error!")
+else:
+    st.success("✅ Energy allocation is good")
+
+# 2. Volume Check
+vol_from_summary = results["summary"]["Volume_m3"].sum()
+vol_from_wagons = results["wagons"]["m3"].sum()
+volume_ratio = vol_from_summary / vol_from_wagons if vol_from_wagons > 0 else 0
+
+st.write(f"**Volume Check:**")
+st.write(f"- From wagons: {vol_from_wagons:,.2f} m³")
+st.write(f"- From summary: {vol_from_summary:,.2f} m³")
+st.write(f"- Ratio: {volume_ratio:.2f}×")
+
+if abs(volume_ratio - 4.0) < 0.1:
+    st.error("❌ Volume is multiplied by zones! This will make kWh/kg too low!")
+elif abs(volume_ratio - 1.0) < 0.1:
+    st.success("✅ Volume calculation is correct")
+else:
+    st.warning(f"⚠️ Unexpected volume ratio: {volume_ratio:.2f}")
+
+# 3. Water Check
+total_water = total_water  # From earlier calculation
+avg_water_per_m3 = total_water / vol_from_wagons if vol_from_wagons > 0 else 0
+
+st.write(f"**Water Calculation:**")
+st.write(f"- Total water: {total_water:,.0f} kg")
+st.write(f"- Average water/m³: {avg_water_per_m3:.1f} kg/m³")
+
+if avg_water_per_m3 > 350:
+    st.error(f"❌ Water/m³ = {avg_water_per_m3:.1f} is TOO HIGH! Check formulas!")
+elif avg_water_per_m3 < 120:
+    st.error(f"❌ Water/m³ = {avg_water_per_m3:.1f} is TOO LOW! Check formulas!")
+else:
+    st.success(f"✅ Water/m³ = {avg_water_per_m3:.1f} is reasonable")
+
+# 4. KPI Cross-Check
+calculated_kwh_m3 = avg_kwh_per_kg * avg_water_per_m3
+actual_kwh_m3 = avg_kwh_per_m3
+difference = abs(calculated_kwh_m3 - actual_kwh_m3)
+
+st.write(f"**KPI Cross-Check:**")
+st.write(f"- kWh/kg × Water/m³ = {calculated_kwh_m3:.1f} kWh/m³")
+st.write(f"- Actual kWh/m³ = {actual_kwh_m3:.1f} kWh/m³")
+st.write(f"- Difference: {difference:.1f} kWh/m³")
+
+if difference < 5:
+    st.success("✅ KPIs are mathematically consistent")
+else:
+    st.warning(f"⚠️ Difference of {difference:.1f} kWh/m³ suggests data inconsistency")
+
+# 5. Product-specific water check
+st.write(f"**Water/m³ by Product:**")
+for detail in water_calc_details:
+    water_m3 = detail["Water/m³ (kg)"]
+    prod = detail["Product"]
+    
+    if water_m3 > 350:
+        st.write(f"- {prod}: {water_m3:.1f} kg/m³ ❌ TOO HIGH")
+    elif water_m3 < 120:
+        st.write(f"- {prod}: {water_m3:.1f} kg/m³ ❌ TOO LOW")
+    else:
+        st.write(f"- {prod}: {water_m3:.1f} kg/m³ ✅")
 # ---------------------------------------------------------
 # Session state
 # ---------------------------------------------------------
@@ -1681,3 +1764,4 @@ Difference: {abs(calculated_kwh_m3 - avg_kwh_per_m3):.1f} kWh/m³
         st.error(f"❌ Display error: {e}")
         with st.expander("Details"):
             st.exception(e)
+
