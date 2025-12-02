@@ -608,7 +608,6 @@ def allocate_energy(e: pd.DataFrame, ivals: pd.DataFrame) -> pd.DataFrame:
 
 
 def add_water_kpis(df: pd.DataFrame) -> pd.DataFrame:
-    def add_water_kpis(df: pd.DataFrame) -> pd.DataFrame:
     """
     Add water-related KPIs using the formulas from product specifications.
     
@@ -793,6 +792,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
