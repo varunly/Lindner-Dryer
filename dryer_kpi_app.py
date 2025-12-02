@@ -606,24 +606,7 @@ Actual:     {avg_kwh_per_m3:.1f} kWh/m³
 Difference: {abs(calculated_kwh_m3 - avg_kwh_per_m3):.1f} kWh/m³
                 """, language="text")
                 
-                st.markdown("### ✅ Sanity Check")
-                expected_kwh_kg_min = 0.8
-                expected_kwh_kg_max = 1.5
-                
-                if expected_kwh_kg_min <= avg_kwh_per_kg <= expected_kwh_kg_max:
-                    st.success(f"✅ kWh/kg = {avg_kwh_per_kg:.3f} is within expected range ({expected_kwh_kg_min}-{expected_kwh_kg_max} kWh/kg)")
-                elif avg_kwh_per_kg < expected_kwh_kg_min:
-                    st.warning(f"""
-⚠️ kWh/kg = {avg_kwh_per_kg:.3f} is **LOWER** than expected range ({expected_kwh_kg_min}-{expected_kwh_kg_max} kWh/kg)
-
-**Possible Reasons:**
-1. **Water overestimated:** Check if water/m³ values in product specs are too high
-2. **Energy underestimated:** Check if energy allocation is missing some consumption
-3. **Volume data issues:** Check if wagon volumes are correct
-                    """)
-                else:
-                    st.warning(f"⚠️ kWh/kg = {avg_kwh_per_kg:.3f} is HIGHER than expected range")
-
+            
             # ===== VOLUME BREAKDOWN & VALIDATION =====
             with st.expander("📊 Volume Breakdown & Validation"):
                 st.subheader("Volume Statistics")
@@ -1681,3 +1664,4 @@ Difference: {abs(calculated_kwh_m3 - avg_kwh_per_m3):.1f} kWh/m³
         st.error(f"❌ Display error: {e}")
         with st.expander("Details"):
             st.exception(e)
+
