@@ -609,19 +609,57 @@ def allocate_energy(e: pd.DataFrame, ivals: pd.DataFrame) -> pd.DataFrame:
 
 
 def add_water_kpis(df: pd.DataFrame) -> pd.DataFrame:
+    def add_water_kpis(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Add water-related KPIs using the formulas from product specifications.
+    
+    Formula: Water per plate (g) = Slope × Suspension (kg) + Intercept
+    Then convert to kg and calculate per m³
+    """
     df = df.copy()
     
-    df["water_per_m3_bench"] = df["Produkt"].map(WATER_PER_M3_KG)
-    default_water = np.mean(list(WATER_PER_M3_KG.values())) if WATER_PER_M3_KG else 200.0
-    df["water_per_m3_bench"] = df["water_per_m3_bench"].fillna(default_water)
+    def calculate_water_for_product(product):
+        """Calculate water per m³ using the product's formula."""
+        if product in PRODUCT_SPECIFICATIONS:
+            spec = PRODUCT_SPECIFICATIONS[product]
+            
+            # Formula: Water/mm (g) = Slope × Suspension + Intercept
+            slope = spec["slope"]
+            intercept = spec["intercept"]
+            
+            # Water per mm in grams
+            water_per_mm_g = slope * SUSPENSION_KG + intercept
+            
+            # Pressed thickness in mm
+            pressed_thickness_mm = spec["pressed_thickness_mm"]
+            
+            # Total water per plate in kg
+            water_per_plate_kg = (water_per_mm_g * pressed_thickness_mm) / 1000.0
+            
+            # Volume per plate in m³
+            volume_per_plate_m3 = spec["volume_m3"]
+            
+            # Water per m³
+            water_per_m3_kg = water_per_plate_kg / volume_per_plate_m3
+            
+            return water_per_m3_kg
+        else:
+            # Fallback for unknown products
+            return np.mean(list(WATER_PER_M3_KG.values())) if WATER_PER_M3_KG else 200.0
     
-    df["Water_kg"] = df["Volume_m3"] * df["water_per_m3_bench"]
+    # Calculate water per m³ for each product using formula
+    df["water_per_m3_formula"] = df["Produkt"].apply(calculate_water_for_product)
     
+    # Calculate total water
+    df["Water_kg"] = df["Volume_m3"] * df["water_per_m3_formula"]
+    
+    # Calculate energy efficiency per kg of water
     df["kWh_thermal_per_m3"] = safe_divide(df["Energy_thermal_kWh"], df["Volume_m3"])
     df["kWh_per_m3"] = safe_divide(df["Energy_kWh"], df["Volume_m3"])
     df["kWh_thermal_per_kg"] = safe_divide(df["Energy_thermal_kWh"], df["Water_kg"])
     df["kWh_per_kg"] = safe_divide(df["Energy_kWh"], df["Water_kg"])
     
+    # Clip negative values
     for col in ["kWh_thermal_per_m3", "kWh_per_m3", "kWh_thermal_per_kg", "kWh_per_kg"]:
         if col in df.columns:
             df[col] = df[col].clip(lower=0)
@@ -756,6 +794,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
