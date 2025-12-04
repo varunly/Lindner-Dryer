@@ -282,10 +282,93 @@ def run_analysis(energy_path: str, wagon_path: str, products_filter, month_filte
         
         raw_wagon_rows = len(w_raw)
                 # After: w_raw = pd.read_excel(...)
+                # ===== PARSE WAGON DATA =====
+        status.text("🔄 Parsing wagon tracking data...")
+        progress.progress(35)
+        
+        try:
+            w_raw = pd.read_excel(
+                wagon_path,
+                sheet_name=CONFIG["wagon_sheet"],
+                header=CONFIG["wagon_header_row"],
+            )
+        except Exception as e:
+            try:
+                w_raw = pd.read_excel(
+                    wagon_path,
+                    sheet_name=CONFIG["wagon_sheet"],
+                    header=CONFIG["wagon_header_row"],
+                    engine='openpyxl'
+                )
+            except:
+                raise ValueError(f"Cannot read wagon file: {e}")
         
         raw_wagon_rows = len(w_raw)
         
-        # ===== CRITICAL DEBUG =====
+        # =========================================
+        # 🚨 ADD THIS DEBUG CODE HERE 🚨
+        # =========================================
+        with debug_container:
+            with st.expander("🚨🚨🚨 CRITICAL DEBUG 🚨🚨🚨", expanded=True):
+                st.error("IF YOU DON'T SEE THIS, THE NEW CODE ISN'T RUNNING!")
+                
+                # 1. Show what trockner filter is being passed
+                st.write(f"### 1. Trockner Filter Value")
+                st.write(f"**trockner_filter parameter:** `{trockner_filter}`")
+                st.write(f"**Type:** `{type(trockner_filter)}`")
+                
+                trockner_to_use_debug = trockner_filter if trockner_filter != "All" else None
+                st.write(f"**trockner_to_use:** `{trockner_to_use_debug}`")
+                
+                # 2. Clean column names and find Trockner column
+                st.write(f"### 2. Finding Trockner Column")
+                
+                w_test = w_raw.copy()
+                w_test.columns = [str(c).replace("\n", "").replace("\r", "").strip() for c in w_test.columns]
+                
+                trockner_col_test = None
+                for col in w_test.columns:
+                    if "trock" in col.lower():
+                        trockner_col_test = col
+                        break
+                
+                st.write(f"**Trockner column found:** `{trockner_col_test}`")
+                
+                if trockner_col_test:
+                    # 3. Show ALL unique Trockner values
+                    st.write(f"### 3. Trockner Values in File")
+                    
+                    trockner_raw = w_test[trockner_col_test].astype(str).str.strip().str.upper()
+                    unique_vals = trockner_raw.unique().tolist()
+                    
+                    st.write(f"**Unique values ({len(unique_vals)}):**")
+                    for v in unique_vals[:20]:
+                        count = (trockner_raw == v).sum()
+                        st.write(f"  - `'{v}'` : {count:,} rows")
+                    
+                    # 4. Manual count what SHOULD happen
+                    st.write(f"### 4. Expected Counts")
+                    
+                    # Filter to valid Trockner (A or B) only
+                    valid_trockner = trockner_raw.isin(["A", "B"])
+                    
+                    # Count A and B
+                    count_a = (trockner_raw == "A").sum()
+                    count_b = (trockner_raw == "B").sum()
+                    
+                    st.success(f"🅰️ **Trockner A:** {count_a:,} rows")
+                    st.success(f"🅱️ **Trockner B:** {count_b:,} rows")
+                    st.success(f"**Total valid:** {count_a + count_b:,} rows")
+                    
+                    # Show what filter will do
+                    if trockner_to_use_debug == "A":
+                        st.info(f"🎯 You selected A → Expected: **{count_a:,}** rows")
+                    elif trockner_to_use_debug == "B":
+                        st.info(f"🎯 You selected B → Expected: **{count_b:,}** rows")
+                    else:
+                        st.warning(f"⚠️ No filter (All) → Expected: **{count_a + count_b:,}** rows")
+        
+              # ===== CRITICAL DEBUG =====
         with debug_container:
             with st.expander("🚨 DEBUG 0: TROCKNER FILTER DIAGNOSTIC", expanded=True):
                 st.markdown("### 🔍 Why Trockner Filter Might Not Work")
@@ -2400,6 +2483,7 @@ Verification:
         st.error(f"❌ Display error: {e}")
         with st.expander("🔍 View Error Details"):
             st.exception(e)
+
 
 
 
