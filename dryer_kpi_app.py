@@ -281,7 +281,83 @@ def run_analysis(energy_path: str, wagon_path: str, products_filter, month_filte
                 raise ValueError(f"Cannot read wagon file: {e}")
         
         raw_wagon_rows = len(w_raw)
+                # After: w_raw = pd.read_excel(...)
         
+        raw_wagon_rows = len(w_raw)
+        
+        # ===== CRITICAL DEBUG =====
+        with debug_container:
+            with st.expander("🚨 DEBUG 0: TROCKNER FILTER DIAGNOSTIC", expanded=True):
+                st.markdown("### 🔍 Why Trockner Filter Might Not Work")
+                
+                # Clean column names like parse_wagon does
+                w_test = w_raw.copy()
+                w_test.columns = [str(c).replace("\n", "").replace("\r", "").strip() for c in w_test.columns]
+                
+                # Show cleaned columns
+                st.write("**Cleaned column names (first 15):**")
+                for i, col in enumerate(w_test.columns[:15]):
+                    st.code(f"[{i:2d}] '{col}'")
+                
+                # Find Trockner column
+                trockner_col_found = None
+                for col in w_test.columns:
+                    if "trock" in col.lower():
+                        trockner_col_found = col
+                        break
+                
+                if trockner_col_found:
+                    st.success(f"✅ Found Trockner column: **'{trockner_col_found}'**")
+                    
+                    # Show raw values
+                    raw_vals = w_test[trockner_col_found].astype(str).str.strip()
+                    st.write("**Raw Trockner values (sample):**")
+                    st.write(raw_vals.head(20).tolist())
+                    
+                    # Show unique values
+                    unique_vals = raw_vals.unique()
+                    st.write(f"**Unique values ({len(unique_vals)}):** {unique_vals.tolist()[:20]}")
+                    
+                    # Clean and uppercase
+                    clean_vals = raw_vals.str.upper()
+                    st.write("**Value distribution (cleaned):**")
+                    val_counts = clean_vals.value_counts()
+                    for val, count in val_counts.items():
+                        st.write(f"  - '{val}': **{count:,}** rows")
+                    
+                    # Test filter
+                    st.markdown("---")
+                    st.markdown("### 🧪 Filter Test")
+                    
+                    filter_val = trockner_filter.upper() if trockner_filter != "All" else None
+                    st.write(f"**Requested filter:** {filter_val or 'None (All)'}")
+                    
+                    if filter_val:
+                        # Exact match test
+                        exact_mask = clean_vals == filter_val
+                        exact_count = exact_mask.sum()
+                        st.write(f"**Exact match '{filter_val}':** {exact_count:,} rows")
+                        
+                        # Contains test
+                        contains_mask = clean_vals.str.contains(filter_val, na=False)
+                        contains_count = contains_mask.sum()
+                        st.write(f"**Contains '{filter_val}':** {contains_count:,} rows")
+                        
+                        # Show sample matching rows
+                        if exact_count > 0:
+                            st.write("**Sample matching rows:**")
+                            st.dataframe(w_test[exact_mask].head(5)[[w_test.columns[0], trockner_col_found]])
+                        else:
+                            st.error(f"❌ NO ROWS MATCH '{filter_val}' exactly!")
+                            st.write("**This is why the filter isn't working!**")
+                            
+                            # Show what values ARE in the column
+                            st.write("**The column actually contains these values:**")
+                            for val in unique_vals[:10]:
+                                st.code(f"'{val}' (repr: {repr(val)})")
+                else:
+                    st.error("❌ Trockner column NOT FOUND!")
+                    st.write("Searched for columns containing 'trock'")
         # ===== SHOW RAW DATA DEBUG INFO =====
         with debug_container:
             with st.expander("🔧 DEBUG 1: Raw Wagon File Analysis", expanded=True):
@@ -2324,6 +2400,7 @@ Verification:
         st.error(f"❌ Display error: {e}")
         with st.expander("🔍 View Error Details"):
             st.exception(e)
+
 
 
 
