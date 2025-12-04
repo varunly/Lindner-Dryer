@@ -1591,5 +1591,6 @@ Difference: {abs(calculated_kwh_m3 - avg_kwh_per_m3):.1f} kWh/m³
                 "📥 Download Complete Excel Report",
                 excel_data,
                 f"Dryer_KPI_Analysis_Trockner_{applied_trockner}.xlsx",
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
             
+
