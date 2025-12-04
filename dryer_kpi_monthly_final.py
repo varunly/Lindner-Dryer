@@ -525,24 +525,43 @@ def parse_wagon(df: pd.DataFrame, trockner: str = None) -> pd.DataFrame:
             df["t0"] = pd.NaT
             logger.warning("✗ Could not parse timestamps")
     
-    # ========================================
+        # ========================================
     # STEP 8: PARSE PRODUCT
     # ========================================
     produkt_col = find_column_flexible(df, ["Produkt", "Product", "Prod"])
     
     if produkt_col and produkt_col in df.columns:
-        df["Produkt"] = df[produkt_col].astype(str).str.strip()
+        # Clean product names: strip whitespace and convert to uppercase
+        df["Produkt"] = df[produkt_col].astype(str).str.strip().str.upper()
+        
+        # Fix common variations (e.g., "L 36" -> "L36")
+        df["Produkt"] = df["Produkt"].str.replace(" ", "", regex=False)
     else:
         df["Produkt"] = "Unknown"
+    
+    # Log product distribution BEFORE filtering
+    logger.info("Product distribution (before filtering):")
+    prod_counts = df["Produkt"].value_counts()
+    for prod, count in prod_counts.head(15).items():
+        in_specs = "✓" if prod in PRODUCT_SPECIFICATIONS else "✗"
+        logger.info(f"  {in_specs} '{prod}': {count:,} rows")
     
     # Filter to valid products only
     valid_products = list(PRODUCT_SPECIFICATIONS.keys())
     count_before = len(df)
+    invalid_products_df = df[~df["Produkt"].isin(valid_products)]
+    
+    if len(invalid_products_df) > 0:
+        invalid_prods = invalid_products_df["Produkt"].value_counts()
+        logger.warning(f"Removing {len(invalid_products_df)} rows with invalid products:")
+        for prod, count in invalid_prods.items():
+            logger.warning(f"  ✗ '{prod}': {count:,} rows")
+    
     df = df[df["Produkt"].isin(valid_products)].copy()
     count_after = len(df)
     
     if count_before != count_after:
-        logger.info(f"Removed {count_before - count_after} rows with invalid product")
+        logger.info(f"Product filter: {count_before:,} → {count_after:,} rows (removed {count_before - count_after:,})")
     
     # ========================================
     # STEP 9: PARSE ZONE ENTRY TIMES
@@ -1064,3 +1083,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
