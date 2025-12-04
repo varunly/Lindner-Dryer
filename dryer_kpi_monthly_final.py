@@ -318,7 +318,9 @@ def parse_wagon(df: pd.DataFrame, trockner: str = None) -> pd.DataFrame:
     Parse wagon data with CORRECT Trockner filtering.
     
     FIXED: 
-    - Column names have newlines: 'WG-\\nNr' → 'WG-Nr', 'Trock-\\nner' → 'Trockner'
+    - Filter out empty/invalid rows FIRST
+    - Then apply Trockner filter
+    - Column names have newlines that need to be removed
     - Product is from 'EM' (thickness) + 'Rez.' (type L/N/Y with forward-fill)
     """
     logger.info("="*70)
@@ -347,7 +349,7 @@ def parse_wagon(df: pd.DataFrame, trockner: str = None) -> pd.DataFrame:
     
     logger.info("Column name cleaning:")
     changes_logged = 0
-    for i, (orig, clean) in enumerate(zip(original_columns[:30], df.columns[:30])):
+    for i, (orig, clean) in enumerate(zip(original_columns[:15], df.columns[:15])):
         if str(orig) != clean:
             logger.info(f"  [{i:2d}] {repr(str(orig))} → '{clean}'")
             changes_logged += 1
@@ -355,8 +357,7 @@ def parse_wagon(df: pd.DataFrame, trockner: str = None) -> pd.DataFrame:
     if changes_logged == 0:
         logger.info("  No column names needed cleaning")
     
-    # Log all columns for debugging
-    logger.info(f"All columns (first 20): {list(df.columns)[:20]}")
+    logger.info(f"Columns (first 15): {list(df.columns)[:15]}")
     
     # ========================================
     # STEP 2: FIND KEY COLUMNS
@@ -364,76 +365,135 @@ def parse_wagon(df: pd.DataFrame, trockner: str = None) -> pd.DataFrame:
     
     # Find Trockner column
     trockner_col = find_column_flexible(df, ["Trockner", "Trock-ner", "Trock-", "TROCKNER"])
-    
     if trockner_col:
-        logger.info(f"✓ Found Trockner column: '{trockner_col}'")
+        logger.info(f"✓ Trockner column: '{trockner_col}'")
     else:
         logger.warning("✗ Trockner column NOT FOUND!")
     
-    # Find wagon number column
-    wagon_col = find_column_flexible(df, ["WG-Nr", "WG-Nr.", "WGNr", "WG Nr", "WG_Nr", "Wagen"])
-    
+    # Find wagon number column (first column or WG-Nr)
+    wagon_col = find_column_flexible(df, ["WG-Nr", "WG-Nr.", "WGNr", "WG Nr", "WG_Nr"])
     if not wagon_col:
         wagon_col = df.columns[0]
-        logger.info(f"  Using first column as wagon number: '{wagon_col}'")
-    else:
-        logger.info(f"✓ Found wagon column: '{wagon_col}'")
+    logger.info(f"✓ Wagon column: '{wagon_col}'")
     
-    # Find volume column (m³)
+    # Find volume column (m³) - typically column AA (index 26)
     volume_col = find_column_flexible(df, ["m³", "m3", "Volumen", "Volume"])
-    
     if not volume_col and len(df.columns) > 26:
         volume_col = df.columns[26]
-        logger.info(f"  Using column at position 26 as volume: '{volume_col}'")
-    elif volume_col:
-        logger.info(f"✓ Found volume column: '{volume_col}'")
-    else:
-        logger.warning("✗ Volume column NOT FOUND!")
+    logger.info(f"✓ Volume column: '{volume_col}'")
     
-    # Find EM column (thickness number: 30, 34, 38, etc.)
+    # Find EM column (thickness)
     em_col = find_column_flexible(df, ["EM", "Dicke", "Thickness"])
-    
     if em_col:
-        logger.info(f"✓ Found EM (thickness) column: '{em_col}'")
-        sample_em = df[em_col].dropna().head(10).tolist()
-        logger.info(f"  Sample EM values: {sample_em}")
+        logger.info(f"✓ EM (thickness) column: '{em_col}'")
     else:
         logger.warning("✗ EM column NOT FOUND!")
     
-    # Find Rez. column (product type: L, N, Y - sparse, needs forward-fill)
-    rez_col = find_column_flexible(df, ["Rez.", "Rez", "Rezept", "Rezeptur", "Type", "Typ"])
-    
+    # Find Rez. column (product type)
+    rez_col = find_column_flexible(df, ["Rez.", "Rez", "Rezept", "Rezeptur"])
     if rez_col:
-        logger.info(f"✓ Found Rez. (product type) column: '{rez_col}'")
-        # Show non-empty values
-        non_empty_rez = df[rez_col].dropna()
-        non_empty_rez = non_empty_rez[non_empty_rez.astype(str).str.strip() != ""]
-        logger.info(f"  Non-empty Rez. values: {non_empty_rez.head(20).tolist()}")
-        logger.info(f"  Unique Rez. values: {non_empty_rez.astype(str).str.strip().str.upper().unique().tolist()}")
+        logger.info(f"✓ Rez. (type) column: '{rez_col}'")
     else:
         logger.warning("✗ Rez. column NOT FOUND!")
     
+    # Find timestamp column
+    timestamp_col = find_column_flexible(df, ["Pressdat. + Zeit", "Pressdat", "Pressdatum"])
+    if timestamp_col:
+        logger.info(f"✓ Timestamp column: '{timestamp_col}'")
+    else:
+        logger.warning("✗ Timestamp column NOT FOUND!")
+    
     # ========================================
-    # STEP 3: SHOW TROCKNER DISTRIBUTION
+    # STEP 3: FILTER OUT EMPTY/INVALID ROWS FIRST!
+    # This is critical - we need to remove empty rows
+    # before doing any other filtering
     # ========================================
-    if trockner_col:
+    logger.info("")
+    logger.info("="*50)
+    logger.info("STEP 3: FILTERING OUT EMPTY/INVALID ROWS")
+    logger.info("="*50)
+    
+    count_start = len(df)
+    logger.info(f"Starting with: {count_start:,} rows")
+    
+    # 3a: Remove rows where wagon number is empty/NaN
+    if wagon_col and wagon_col in df.columns:
+        wagon_vals = df[wagon_col].astype(str).str.strip()
+        valid_wagon = (wagon_vals != "") & (wagon_vals != "nan") & (wagon_vals != "NaN") & (wagon_vals != "None")
+        
+        count_before = len(df)
+        df = df[valid_wagon].copy()
+        count_after = len(df)
+        
+        if count_before != count_after:
+            logger.info(f"  Removed {count_before - count_after:,} rows with empty wagon number")
+            logger.info(f"  Remaining: {count_after:,} rows")
+    
+    # 3b: Remove rows where EM (thickness) is empty/invalid
+    if em_col and em_col in df.columns:
+        em_vals = pd.to_numeric(df[em_col], errors='coerce')
+        valid_em = em_vals.notna() & (em_vals > 0) & (em_vals < 100)  # Reasonable thickness range
+        
+        count_before = len(df)
+        df = df[valid_em].copy()
+        count_after = len(df)
+        
+        if count_before != count_after:
+            logger.info(f"  Removed {count_before - count_after:,} rows with invalid EM (thickness)")
+            logger.info(f"  Remaining: {count_after:,} rows")
+    
+    # 3c: Remove rows where volume is empty/invalid
+    if volume_col and volume_col in df.columns:
+        vol_vals = pd.to_numeric(df[volume_col], errors='coerce')
+        valid_vol = vol_vals.notna() & (vol_vals > 0)
+        
+        count_before = len(df)
+        df = df[valid_vol].copy()
+        count_after = len(df)
+        
+        if count_before != count_after:
+            logger.info(f"  Removed {count_before - count_after:,} rows with invalid volume")
+            logger.info(f"  Remaining: {count_after:,} rows")
+    
+    # 3d: Remove rows where Trockner is empty (not A or B)
+    if trockner_col and trockner_col in df.columns:
+        trockner_vals = df[trockner_col].astype(str).str.strip().str.upper()
+        valid_trockner = trockner_vals.isin(["A", "B"])
+        
+        count_before = len(df)
+        df = df[valid_trockner].copy()
+        count_after = len(df)
+        
+        if count_before != count_after:
+            logger.info(f"  Removed {count_before - count_after:,} rows with invalid Trockner (not A or B)")
+            logger.info(f"  Remaining: {count_after:,} rows")
+    
+    logger.info("")
+    logger.info(f"After removing empty/invalid rows: {len(df):,} rows")
+    logger.info(f"  (Removed {count_start - len(df):,} empty/invalid rows)")
+    
+    # ========================================
+    # STEP 4: SHOW TROCKNER DISTRIBUTION (after cleaning)
+    # ========================================
+    if trockner_col and trockner_col in df.columns:
         df["_trockner_clean"] = df[trockner_col].astype(str).str.strip().str.upper()
         
         logger.info("")
-        logger.info("TROCKNER DISTRIBUTION (before filtering):")
+        logger.info("TROCKNER DISTRIBUTION (after cleaning):")
         value_counts = df["_trockner_clean"].value_counts()
-        for val, count in value_counts.head(10).items():
+        for val, count in value_counts.items():
             logger.info(f"  '{val}': {count:,} rows")
     
     # ========================================
-    # STEP 4: APPLY TROCKNER FILTER
+    # STEP 5: APPLY TROCKNER FILTER
     # ========================================
-    if trockner and trockner_col:
+    if trockner and trockner_col and trockner_col in df.columns:
         logger.info("")
         logger.info(f"APPLYING TROCKNER FILTER: '{trockner}'")
         
         count_before = len(df)
         trockner_upper = trockner.upper().strip()
+        
         mask = df["_trockner_clean"] == trockner_upper
         match_count = mask.sum()
         
@@ -442,8 +502,8 @@ def parse_wagon(df: pd.DataFrame, trockner: str = None) -> pd.DataFrame:
         df = df[mask].copy()
         count_after = len(df)
         
-        logger.info(f"  BEFORE: {count_before:,} rows")
-        logger.info(f"  AFTER:  {count_after:,} rows")
+        logger.info(f"  BEFORE filter: {count_before:,} rows")
+        logger.info(f"  AFTER filter:  {count_after:,} rows")
         logger.info(f"  REMOVED: {count_before - count_after:,} rows")
         
         if df.empty:
@@ -453,39 +513,23 @@ def parse_wagon(df: pd.DataFrame, trockner: str = None) -> pd.DataFrame:
     elif trockner and not trockner_col:
         logger.warning(f"⚠️ Cannot filter by Trockner - column not found!")
     else:
+        # No filter requested
         df = df.drop(columns=["_trockner_clean"], errors="ignore")
     
     # ========================================
-    # STEP 5: PARSE VOLUME
+    # STEP 6: PARSE VOLUME (already validated above)
     # ========================================
     if volume_col and volume_col in df.columns:
-        logger.info("")
-        logger.info(f"Reading volume from: '{volume_col}'")
-        
         df["m3"] = pd.to_numeric(df[volume_col], errors='coerce')
-        
-        valid_count = df["m3"].notna().sum()
-        positive_count = (df["m3"] > 0).sum()
-        
-        logger.info(f"  Numeric values: {valid_count:,}")
-        logger.info(f"  Positive values: {positive_count:,}")
-        
-        count_before = len(df)
-        df = df[df["m3"] > 0].copy()
-        count_after = len(df)
-        
-        if count_before != count_after:
-            logger.info(f"  Removed {count_before - count_after} rows with invalid volume")
-        
-        if not df.empty:
-            logger.info(f"  Volume range: {df['m3'].min():.4f} - {df['m3'].max():.4f} m³")
-            logger.info(f"  Total volume: {df['m3'].sum():,.2f} m³")
+        logger.info(f"\nVolume statistics:")
+        logger.info(f"  Total volume: {df['m3'].sum():,.2f} m³")
+        logger.info(f"  Mean volume: {df['m3'].mean():.4f} m³")
+        logger.info(f"  Range: {df['m3'].min():.4f} - {df['m3'].max():.4f} m³")
     else:
-        logger.warning("Volume column not available - using default 3.5 m³")
         df["m3"] = 3.5
     
     # ========================================
-    # STEP 6: RENAME WAGON COLUMN
+    # STEP 7: RENAME WAGON COLUMN
     # ========================================
     if wagon_col and wagon_col in df.columns and wagon_col != "WG_Nr":
         df = df.rename(columns={wagon_col: "WG_Nr"})
@@ -493,14 +537,14 @@ def parse_wagon(df: pd.DataFrame, trockner: str = None) -> pd.DataFrame:
         df["WG_Nr"] = df.iloc[:, 0]
     
     # ========================================
-    # STEP 7: PARSE TIMESTAMPS
+    # STEP 8: PARSE TIMESTAMPS
     # ========================================
-    press_col = find_column_flexible(df, ["Pressdat. + Zeit", "Pressdat", "Pressdatum"])
-    
-    if press_col and press_col in df.columns:
-        df["t0"] = pd.to_datetime(df[press_col], errors="coerce")
-        logger.info(f"✓ Parsed timestamps from '{press_col}'")
+    if timestamp_col and timestamp_col in df.columns:
+        df["t0"] = pd.to_datetime(df[timestamp_col], errors="coerce")
+        valid_ts = df["t0"].notna().sum()
+        logger.info(f"\n✓ Parsed {valid_ts:,} valid timestamps from '{timestamp_col}'")
     else:
+        # Try alternative columns
         date_col = find_column_flexible(df, ["Datum", "Date"])
         time_col = find_column_flexible(df, ["Zeit", "Time", "Uhrzeit"])
         
@@ -514,8 +558,15 @@ def parse_wagon(df: pd.DataFrame, trockner: str = None) -> pd.DataFrame:
             df["t0"] = pd.NaT
             logger.warning("✗ Could not parse timestamps")
     
+    # Filter rows without valid timestamp
+    count_before = len(df)
+    df = df[df["t0"].notna()].copy()
+    count_after = len(df)
+    if count_before != count_after:
+        logger.info(f"  Removed {count_before - count_after} rows without valid timestamp")
+    
     # ========================================
-    # STEP 8: PARSE PRODUCT (EM + Rez. with forward-fill)
+    # STEP 9: PARSE PRODUCT (EM + Rez. with forward-fill)
     # ========================================
     logger.info("")
     logger.info("="*50)
@@ -532,21 +583,21 @@ def parse_wagon(df: pd.DataFrame, trockner: str = None) -> pd.DataFrame:
             logger.info(f"  {val}: {count:,} rows")
     else:
         logger.error("Cannot parse product without EM column!")
-        df["Produkt"] = "Unknown"
         df["_thickness"] = pd.NA
     
     if rez_col and rez_col in df.columns:
         # Get product type from Rez. column
         df["_type_raw"] = df[rez_col].astype(str).str.strip().str.upper()
         
-        # Replace empty strings and 'NAN' with NaN for forward-fill
-        df["_type_raw"] = df["_type_raw"].replace(["", "NAN", "NONE", "NA"], pd.NA)
+        # Replace empty strings and invalid values with NaN for forward-fill
+        df["_type_raw"] = df["_type_raw"].replace(["", "NAN", "NONE", "NA", "<NA>"], pd.NA)
         
-        # Show raw type distribution before forward-fill
-        logger.info(f"\nRaw product type from '{rez_col}' (before forward-fill):")
-        type_counts_raw = df["_type_raw"].value_counts(dropna=False)
-        for val, count in type_counts_raw.items():
-            logger.info(f"  '{val}': {count:,} rows")
+        # Count non-empty values
+        non_empty_count = df["_type_raw"].notna().sum()
+        logger.info(f"\nRaw product type from '{rez_col}':")
+        logger.info(f"  Non-empty values: {non_empty_count:,}")
+        if non_empty_count > 0:
+            logger.info(f"  Unique: {df['_type_raw'].dropna().unique().tolist()}")
         
         # FORWARD-FILL the product type
         df["_type_filled"] = df["_type_raw"].ffill()
@@ -561,11 +612,10 @@ def parse_wagon(df: pd.DataFrame, trockner: str = None) -> pd.DataFrame:
         )
         
         logger.info(f"\nProduct type after forward-fill:")
-        type_counts_filled = df["_type_filled"].value_counts()
-        for val, count in type_counts_filled.items():
+        type_counts = df["_type_filled"].value_counts()
+        for val, count in type_counts.items():
             logger.info(f"  '{val}': {count:,} rows")
     else:
-        # No Rez. column - default all to 'L'
         logger.warning("No Rez. column found - defaulting all to L-type")
         df["_type_filled"] = "L"
     
@@ -577,13 +627,12 @@ def parse_wagon(df: pd.DataFrame, trockner: str = None) -> pd.DataFrame:
         if pd.isna(thickness):
             return "Unknown"
         
-        product_code = f"{ptype}{int(thickness)}"
-        return product_code
+        return f"{ptype}{int(thickness)}"
     
     df["Produkt"] = df.apply(create_product_code, axis=1)
     
-    # Show product distribution before filtering
-    logger.info(f"\nCombined product codes (Type + Thickness):")
+    # Show product distribution
+    logger.info(f"\nCombined product codes:")
     product_counts = df["Produkt"].value_counts()
     for val, count in product_counts.items():
         in_specs = "✓" if val in PRODUCT_SPECIFICATIONS else "✗"
@@ -607,12 +656,10 @@ def parse_wagon(df: pd.DataFrame, trockner: str = None) -> pd.DataFrame:
     count_after = len(df)
     
     if count_before != count_after:
-        logger.info(f"\nProduct filter: {count_before:,} → {count_after:,} rows (removed {count_before - count_after:,})")
-    else:
-        logger.info(f"\n✓ All {count_after:,} rows have valid products")
+        logger.info(f"\nProduct filter: {count_before:,} → {count_after:,} rows")
     
     # ========================================
-    # STEP 9: PARSE ZONE ENTRY TIMES
+    # STEP 10: PARSE ZONE ENTRY TIMES
     # ========================================
     for z in ("Z2", "Z3", "Z4", "Z5"):
         zone_col = find_column_flexible(df, [f"In {z}", f"In{z}", f"Zone {z[-1]} In"])
@@ -630,7 +677,7 @@ def parse_wagon(df: pd.DataFrame, trockner: str = None) -> pd.DataFrame:
         df["Entnahme"] = pd.NaT
     
     # ========================================
-    # STEP 10: CALCULATE ZONE DURATIONS
+    # STEP 11: CALCULATE ZONE DURATIONS
     # ========================================
     pairs = [
         ("Z1", "Z2_in", "t0"),
@@ -664,17 +711,10 @@ def parse_wagon(df: pd.DataFrame, trockner: str = None) -> pd.DataFrame:
                 df[out] = parsed.where(~mask, df[out])
     
     # ========================================
-    # STEP 11: ADD MONTH/YEAR
+    # STEP 12: ADD MONTH/YEAR
     # ========================================
     df["Month"] = df["t0"].dt.month
     df["Year"] = df["t0"].dt.year
-    
-    count_before = len(df)
-    df = df[df["t0"].notna()].copy()
-    count_after = len(df)
-    
-    if count_before != count_after:
-        logger.info(f"Removed {count_before - count_after} rows without valid timestamp")
     
     df["Trockner"] = trockner if trockner else "All"
     
@@ -702,6 +742,10 @@ def parse_wagon(df: pd.DataFrame, trockner: str = None) -> pd.DataFrame:
     logger.info("-"*70)
     logger.info(f"TOTAL: {total_rows:,} wagon rows | {total_vol:,.2f} m³ | {avg_vol:.4f} m³/row")
     logger.info("="*70)
+    
+    # Validation for expected counts
+    if trockner == "A" and total_rows != 3692:
+        logger.warning(f"⚠️ Expected 3692 rows for Trockner A, got {total_rows}")
     
     return df
 def diagnose_wagon_file(df: pd.DataFrame, trockner: str = None) -> dict:
@@ -1223,5 +1267,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
