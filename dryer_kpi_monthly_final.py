@@ -2,8 +2,9 @@
 """
 Lindner Dryer KPI Calculation Module
 UPDATED: 
-- Support for Trockner A and Trockner B filtering (column "Trock-")
-- Direct volume reading from "m³" column (column AA, row 7)
+- Fixed volume column detection for "m³" column
+- Better handling of Excel column names with special characters
+- Improved wagon counting and validation
 """
 
 import pandas as pd
@@ -305,17 +306,75 @@ def parse_energy(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def find_volume_column(df: pd.DataFrame) -> Optional[str]:
-    """Find the volume column (m³) in the dataframe."""
-    # Try exact match first
-    if VOLUME_COLUMN in df.columns:
-        return VOLUME_COLUMN
+    """
+    Find the volume column (m³) in the dataframe.
+    Handles various encodings and representations of the m³ symbol.
+    """
+    logger.info("  Searching for volume column...")
+    logger.info(f"  Available columns ({len(df.columns)}): {list(df.columns)}")
     
-    # Try variations
+    # Common variations of the m³ column name
+    volume_patterns = [
+        "m³",           # Standard UTF-8
+        "m3",           # ASCII fallback
+        "m\u00b3",      # Unicode superscript 3
+        "m^3",          # Caret notation
+        "m**3",         # Double asterisk
+        "Volumen",      # German word
+        "Volume",       # English word
+        "vol",          # Abbreviation
+    ]
+    
+    # First, try exact matches
+    for pattern in volume_patterns:
+        if pattern in df.columns:
+            logger.info(f"  → Found volume column (exact match): '{pattern}'")
+            return pattern
+    
+    # Try case-insensitive and partial matches
     for col in df.columns:
-        col_clean = str(col).strip()
-        if col_clean == "m³" or col_clean == "m3" or "m³" in col_clean or "m3" in col_clean.lower():
-            logger.info(f"  → Found volume column: '{col}'")
+        col_str = str(col).strip()
+        col_lower = col_str.lower()
+        
+        # Check various patterns
+        if any([
+            col_str == "m³",
+            col_str == "m3",
+            col_lower == "m³",
+            col_lower == "m3",
+            "m³" in col_str,
+            "m3" in col_lower,
+            col_lower.startswith("m³"),
+            col_lower.startswith("m3"),
+            # Check for unicode variations
+            "\u00b3" in col_str,  # Superscript 3
+            "³" in col_str,
+        ]):
+            logger.info(f"  → Found volume column (pattern match): '{col}'")
             return col
+    
+    # Check by column position (AA = column 26, 0-indexed)
+    # In pandas, after reading Excel, columns are named by their header values
+    # If we know it's column AA (index 26), we can try to access it by position
+    try:
+        if len(df.columns) > 26:
+            col_at_position = df.columns[26]
+            logger.info(f"  → Column at position 26 (AA): '{col_at_position}'")
+            # Check if this column has numeric values that look like volumes
+            sample_values = pd.to_numeric(df[col_at_position], errors='coerce').dropna()
+            if len(sample_values) > 0:
+                avg_val = sample_values.mean()
+                if 0.5 < avg_val < 10:  # Typical volume range per wagon
+                    logger.info(f"  → Using column at position 26 as volume (avg value: {avg_val:.3f})")
+                    return col_at_position
+    except Exception as e:
+        logger.warning(f"  → Error checking column position: {e}")
+    
+    # Log all columns with their bytes for debugging
+    logger.warning("  Volume column not found! Checking column encodings:")
+    for i, col in enumerate(df.columns[:30]):  # First 30 columns
+        col_bytes = str(col).encode('utf-8')
+        logger.warning(f"    [{i}] '{col}' -> {col_bytes}")
     
     return None
 
@@ -392,47 +451,99 @@ def filter_wagons_by_trockner(df: pd.DataFrame, trockner: str) -> pd.DataFrame:
 
 def parse_wagon(df: pd.DataFrame, trockner: str = None) -> pd.DataFrame:
     """
-    Parse wagon data with Trockner filtering.
+    Parse wagon data with improved volume column detection.
     Uses the 'm³' column directly from Excel for volume.
     
     Args:
         df: Raw wagon DataFrame
         trockner: 'A' or 'B' to filter, or None for all wagons
     """
-    logger.info("Parsing wagon data...")
+    logger.info("="*60)
+    logger.info("PARSING WAGON DATA")
+    logger.info("="*60)
+    
+    original_row_count = len(df)
+    logger.info(f"Input: {original_row_count} rows")
+    
     df = df.copy()
 
     # Clean column names (remove newlines, strip whitespace)
     df.columns = [str(c).replace("\n", " ").strip() for c in df.columns]
     
     logger.info(f"  → Found {len(df.columns)} columns")
-    logger.info(f"  → Sample columns: {list(df.columns)[:10]}...")
+    
+    # Log first 35 columns for debugging (to see column AA which is index 26)
+    logger.info("  → First 35 columns:")
+    for i, col in enumerate(df.columns[:35]):
+        logger.info(f"      [{i:2d}] '{col}'")
 
-    # ===== FILTER BY TROCKNER FIRST =====
+    # ===== FILTER BY TROCKNER FIRST (if specified) =====
     if trockner:
         df = filter_wagons_by_trockner(df, trockner)
+        logger.info(f"After Trockner filter: {len(df)} rows")
 
     # ===== GET VOLUME FROM 'm³' COLUMN =====
     volume_col = find_volume_column(df)
     
     if volume_col:
         logger.info(f"  → Using volume column: '{volume_col}'")
-        df["m3"] = pd.to_numeric(df[volume_col], errors='coerce').fillna(0)
         
-        # Check for invalid volumes
-        invalid_volumes = (df["m3"] <= 0).sum()
-        if invalid_volumes > 0:
-            logger.warning(f"  → {invalid_volumes} rows have invalid volume (≤0), will be filtered out")
+        # Debug: show sample values before conversion
+        logger.info(f"  → Sample raw values: {df[volume_col].head(10).tolist()}")
         
-        # Remove rows with zero or negative volume
+        # Convert to numeric
+        df["m3"] = pd.to_numeric(df[volume_col], errors='coerce')
+        
+        # Count parsing results
+        valid_volumes = df["m3"].notna().sum()
+        invalid_volumes = df["m3"].isna().sum()
+        zero_volumes = (df["m3"] == 0).sum()
+        negative_volumes = (df["m3"] < 0).sum()
+        
+        logger.info(f"  → Volume parsing results:")
+        logger.info(f"      Valid: {valid_volumes}")
+        logger.info(f"      Invalid/NaN: {invalid_volumes}")
+        logger.info(f"      Zero: {zero_volumes}")
+        logger.info(f"      Negative: {negative_volumes}")
+        
+        # Fill NaN with 0 for now to avoid losing rows
+        df["m3"] = df["m3"].fillna(0)
+        
+        # Log statistics before filtering
+        logger.info(f"  → Volume statistics (before filtering):")
+        logger.info(f"      Min: {df['m3'].min():.4f}")
+        logger.info(f"      Max: {df['m3'].max():.4f}")
+        logger.info(f"      Mean: {df['m3'].mean():.4f}")
+        logger.info(f"      Sum: {df['m3'].sum():.2f}")
+        
+        # Only filter out rows with volume <= 0
+        rows_before_filter = len(df)
         df = df[df["m3"] > 0].copy()
+        rows_after_filter = len(df)
         
-        logger.info(f"  → Volume range: {df['m3'].min():.3f} - {df['m3'].max():.3f} m³")
-        logger.info(f"  → Average volume per wagon: {df['m3'].mean():.3f} m³")
+        logger.info(f"  → Filtered out {rows_before_filter - rows_after_filter} rows with volume ≤ 0")
+        logger.info(f"  → Remaining: {rows_after_filter} rows")
+        
+        if rows_after_filter == 0:
+            logger.error("  → ALL ROWS FILTERED OUT! Check volume column.")
+            # Try to recover by using calculated volume
+            logger.warning("  → Attempting to recover with calculated volume...")
+            df = parse_wagon_with_calculated_volume(df)
+            return df
+            
+        logger.info(f"  → Final volume range: {df['m3'].min():.4f} - {df['m3'].max():.4f} m³")
+        logger.info(f"  → Average volume per wagon: {df['m3'].mean():.4f} m³")
+        logger.info(f"  → Total volume: {df['m3'].sum():.2f} m³")
+        
     else:
-        logger.error(f"Volume column '{VOLUME_COLUMN}' not found!")
-        logger.error(f"Available columns: {list(df.columns)}")
-        raise ValueError(f"Volume column '{VOLUME_COLUMN}' not found. Please check the Excel file.")
+        logger.error("  → Volume column NOT FOUND!")
+        logger.error("  → Available columns:")
+        for i, col in enumerate(df.columns):
+            logger.error(f"      [{i}] '{col}'")
+        
+        # Try to use calculated volume as fallback
+        logger.warning("  → Attempting fallback: calculate volume from product specs...")
+        df = calculate_fallback_volume(df)
 
     # Parse timestamps
     if "Pressdat. + Zeit" in df.columns:
@@ -457,7 +568,6 @@ def parse_wagon(df: pd.DataFrame, trockner: str = None) -> pd.DataFrame:
     trockner_label = f"TROCKNER {trockner}" if trockner else "ALL TROCKNER"
     logger.info(f"\n{'='*60}")
     logger.info(f"WAGON & VOLUME SUMMARY - {trockner_label}")
-    logger.info(f"(Volume read directly from '{volume_col}' column)")
     logger.info(f"{'='*60}")
     
     # Group by product
@@ -471,7 +581,7 @@ def parse_wagon(df: pd.DataFrame, trockner: str = None) -> pd.DataFrame:
         logger.info(
             f"{prod:6s}: {row['Wagon_Count']:5.0f} wagons | "
             f"Total: {row['Total_Volume']:8.2f} m³ | "
-            f"Avg: {row['Avg_Volume']:.3f} m³/wagon"
+            f"Avg: {row['Avg_Volume']:.4f} m³/wagon"
         )
     
     total_wagons = product_summary["Wagon_Count"].sum()
@@ -479,7 +589,7 @@ def parse_wagon(df: pd.DataFrame, trockner: str = None) -> pd.DataFrame:
     avg_volume = total_volume / total_wagons if total_wagons > 0 else 0
     
     logger.info(f"{'='*60}")
-    logger.info(f"TOTAL: {total_wagons:,.0f} wagons = {total_volume:,.2f} m³ (avg {avg_volume:.3f} m³/wagon)")
+    logger.info(f"TOTAL: {total_wagons:,.0f} wagons = {total_volume:,.2f} m³ (avg {avg_volume:.4f} m³/wagon)")
     logger.info(f"{'='*60}\n")
 
     # Parse zone entry times
@@ -521,12 +631,46 @@ def parse_wagon(df: pd.DataFrame, trockner: str = None) -> pd.DataFrame:
 
     df["Month"] = df["t0"].dt.month
     df["Year"] = df["t0"].dt.year
+    
+    # Filter out rows without valid timestamp
+    before_timestamp_filter = len(df)
     df = df[df["t0"].notna()].copy()
+    after_timestamp_filter = len(df)
+    
+    if before_timestamp_filter != after_timestamp_filter:
+        logger.warning(f"Filtered out {before_timestamp_filter - after_timestamp_filter} rows without valid timestamp")
     
     # Store which Trockner this data is for
     df["Trockner"] = trockner if trockner else "ALL"
     
-    logger.info(f"Parsed {len(df)} wagon records for Trockner {trockner or 'ALL'}")
+    logger.info(f"Final parsed wagon count: {len(df)} wagons")
+    logger.info(f"Final total volume: {df['m3'].sum():.2f} m³")
+    
+    return df
+
+
+def calculate_fallback_volume(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Calculate volume from product specifications as a fallback.
+    """
+    logger.warning("Using fallback volume calculation from product specs...")
+    
+    def get_wagon_volume(row):
+        product = str(row.get("Produkt", "")).strip()
+        if product in PRODUCT_SPECIFICATIONS:
+            spec = PRODUCT_SPECIFICATIONS[product]
+            # Volume per plate × plates per wagon
+            return spec["volume_m3"] * PLATES_PER_WAGON
+        else:
+            # Default average
+            return 3.5  # Approximate average m³ per wagon
+    
+    df["m3"] = df.apply(get_wagon_volume, axis=1)
+    
+    logger.info(f"Fallback volume calculation complete:")
+    logger.info(f"  Total volume: {df['m3'].sum():.2f} m³")
+    logger.info(f"  Average per wagon: {df['m3'].mean():.4f} m³")
+    
     return df
 
 
@@ -559,7 +703,7 @@ def explode_intervals(df: pd.DataFrame) -> pd.DataFrame:
             rows.append({
                 "WG_Nr": r.get("WG_Nr", ""),
                 "Produkt": r["Produkt"],
-                "m3": r["m3"],  # Now using the actual volume from Excel
+                "m3": r["m3"],  # Using the actual volume from Excel
                 "Zone": z,
                 "P_start": s,
                 "P_end": e,
@@ -569,7 +713,7 @@ def explode_intervals(df: pd.DataFrame) -> pd.DataFrame:
             })
     
     result = pd.DataFrame(rows)
-    logger.info(f"Created {len(result)} zone intervals")
+    logger.info(f"Created {len(result)} zone intervals from {len(df)} wagons")
     return result
 
 
