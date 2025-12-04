@@ -317,9 +317,9 @@ def parse_wagon(df: pd.DataFrame, trockner: str = None) -> pd.DataFrame:
     """
     Parse wagon data with CORRECT Trockner filtering.
     
-    FIXED: Column names have newlines that need to be removed:
-    - 'WG-\\nNr' → 'WG-Nr'
-    - 'Trock-\\nner' → 'Trockner'
+    FIXED: 
+    - Column names have newlines: 'WG-\\nNr' → 'WG-Nr', 'Trock-\\nner' → 'Trockner'
+    - Product is from 'EM' (thickness) + 'Rez.' (type L/N/Y with forward-fill)
     """
     logger.info("="*70)
     logger.info("PARSING WAGON DATA")
@@ -334,8 +334,6 @@ def parse_wagon(df: pd.DataFrame, trockner: str = None) -> pd.DataFrame:
     # ========================================
     # STEP 1: CLEAN COLUMN NAMES
     # Remove newlines and carriage returns
-    # 'WG-\nNr' → 'WG-Nr'
-    # 'Trock-\nner' → 'Trockner'
     # ========================================
     original_columns = list(df.columns)
     
@@ -356,6 +354,9 @@ def parse_wagon(df: pd.DataFrame, trockner: str = None) -> pd.DataFrame:
     
     if changes_logged == 0:
         logger.info("  No column names needed cleaning")
+    
+    # Log all columns for debugging
+    logger.info(f"All columns (first 20): {list(df.columns)[:20]}")
     
     # ========================================
     # STEP 2: FIND KEY COLUMNS
@@ -388,6 +389,29 @@ def parse_wagon(df: pd.DataFrame, trockner: str = None) -> pd.DataFrame:
         logger.info(f"✓ Found volume column: '{volume_col}'")
     else:
         logger.warning("✗ Volume column NOT FOUND!")
+    
+    # Find EM column (thickness number: 30, 34, 38, etc.)
+    em_col = find_column_flexible(df, ["EM", "Dicke", "Thickness"])
+    
+    if em_col:
+        logger.info(f"✓ Found EM (thickness) column: '{em_col}'")
+        sample_em = df[em_col].dropna().head(10).tolist()
+        logger.info(f"  Sample EM values: {sample_em}")
+    else:
+        logger.warning("✗ EM column NOT FOUND!")
+    
+    # Find Rez. column (product type: L, N, Y - sparse, needs forward-fill)
+    rez_col = find_column_flexible(df, ["Rez.", "Rez", "Rezept", "Rezeptur", "Type", "Typ"])
+    
+    if rez_col:
+        logger.info(f"✓ Found Rez. (product type) column: '{rez_col}'")
+        # Show non-empty values
+        non_empty_rez = df[rez_col].dropna()
+        non_empty_rez = non_empty_rez[non_empty_rez.astype(str).str.strip() != ""]
+        logger.info(f"  Non-empty Rez. values: {non_empty_rez.head(20).tolist()}")
+        logger.info(f"  Unique Rez. values: {non_empty_rez.astype(str).str.strip().str.upper().unique().tolist()}")
+    else:
+        logger.warning("✗ Rez. column NOT FOUND!")
     
     # ========================================
     # STEP 3: SHOW TROCKNER DISTRIBUTION
@@ -491,23 +515,82 @@ def parse_wagon(df: pd.DataFrame, trockner: str = None) -> pd.DataFrame:
             logger.warning("✗ Could not parse timestamps")
     
     # ========================================
-    # STEP 8: PARSE PRODUCT
+    # STEP 8: PARSE PRODUCT (EM + Rez. with forward-fill)
     # ========================================
-    produkt_col = find_column_flexible(df, ["Produkt", "Product", "Prod"])
-    
-    if produkt_col and produkt_col in df.columns:
-        df["Produkt"] = df[produkt_col].astype(str).str.strip().str.upper()
-        df["Produkt"] = df["Produkt"].str.replace(" ", "", regex=False)
-    else:
-        df["Produkt"] = "Unknown"
-    
-    # Log product distribution BEFORE filtering
     logger.info("")
-    logger.info("Product distribution (before filtering):")
-    prod_counts = df["Produkt"].value_counts()
-    for prod, count in prod_counts.head(15).items():
-        in_specs = "✓" if prod in PRODUCT_SPECIFICATIONS else "✗"
-        logger.info(f"  {in_specs} '{prod}': {count:,} rows")
+    logger.info("="*50)
+    logger.info("PARSING PRODUCT (EM + Rez.)")
+    logger.info("="*50)
+    
+    if em_col and em_col in df.columns:
+        # Get thickness from EM column
+        df["_thickness"] = pd.to_numeric(df[em_col], errors='coerce').astype('Int64')
+        
+        logger.info(f"Thickness values from '{em_col}':")
+        thickness_counts = df["_thickness"].value_counts().sort_index()
+        for val, count in thickness_counts.items():
+            logger.info(f"  {val}: {count:,} rows")
+    else:
+        logger.error("Cannot parse product without EM column!")
+        df["Produkt"] = "Unknown"
+        df["_thickness"] = pd.NA
+    
+    if rez_col and rez_col in df.columns:
+        # Get product type from Rez. column
+        df["_type_raw"] = df[rez_col].astype(str).str.strip().str.upper()
+        
+        # Replace empty strings and 'NAN' with NaN for forward-fill
+        df["_type_raw"] = df["_type_raw"].replace(["", "NAN", "NONE", "NA"], pd.NA)
+        
+        # Show raw type distribution before forward-fill
+        logger.info(f"\nRaw product type from '{rez_col}' (before forward-fill):")
+        type_counts_raw = df["_type_raw"].value_counts(dropna=False)
+        for val, count in type_counts_raw.items():
+            logger.info(f"  '{val}': {count:,} rows")
+        
+        # FORWARD-FILL the product type
+        df["_type_filled"] = df["_type_raw"].ffill()
+        
+        # If still NaN at the beginning, default to 'L'
+        df["_type_filled"] = df["_type_filled"].fillna("L")
+        
+        # Clean up - keep only valid types (L, N, Y)
+        valid_types = ["L", "N", "Y"]
+        df["_type_filled"] = df["_type_filled"].apply(
+            lambda x: x if x in valid_types else "L"
+        )
+        
+        logger.info(f"\nProduct type after forward-fill:")
+        type_counts_filled = df["_type_filled"].value_counts()
+        for val, count in type_counts_filled.items():
+            logger.info(f"  '{val}': {count:,} rows")
+    else:
+        # No Rez. column - default all to 'L'
+        logger.warning("No Rez. column found - defaulting all to L-type")
+        df["_type_filled"] = "L"
+    
+    # Combine type + thickness to create product code
+    def create_product_code(row):
+        ptype = row.get("_type_filled", "L")
+        thickness = row.get("_thickness", pd.NA)
+        
+        if pd.isna(thickness):
+            return "Unknown"
+        
+        product_code = f"{ptype}{int(thickness)}"
+        return product_code
+    
+    df["Produkt"] = df.apply(create_product_code, axis=1)
+    
+    # Show product distribution before filtering
+    logger.info(f"\nCombined product codes (Type + Thickness):")
+    product_counts = df["Produkt"].value_counts()
+    for val, count in product_counts.items():
+        in_specs = "✓" if val in PRODUCT_SPECIFICATIONS else "✗"
+        logger.info(f"  {in_specs} '{val}': {count:,} rows")
+    
+    # Clean up temporary columns
+    df = df.drop(columns=["_thickness", "_type_raw", "_type_filled"], errors="ignore")
     
     # Filter to valid products
     valid_products = list(PRODUCT_SPECIFICATIONS.keys())
@@ -516,7 +599,7 @@ def parse_wagon(df: pd.DataFrame, trockner: str = None) -> pd.DataFrame:
     
     if invalid_mask.sum() > 0:
         invalid_prods = df.loc[invalid_mask, "Produkt"].value_counts()
-        logger.warning(f"Removing {invalid_mask.sum()} rows with invalid products:")
+        logger.warning(f"\nRemoving {invalid_mask.sum()} rows with invalid products:")
         for prod, count in invalid_prods.items():
             logger.warning(f"  ✗ '{prod}': {count:,} rows")
     
@@ -524,7 +607,9 @@ def parse_wagon(df: pd.DataFrame, trockner: str = None) -> pd.DataFrame:
     count_after = len(df)
     
     if count_before != count_after:
-        logger.info(f"Product filter: {count_before:,} → {count_after:,} rows")
+        logger.info(f"\nProduct filter: {count_before:,} → {count_after:,} rows (removed {count_before - count_after:,})")
+    else:
+        logger.info(f"\n✓ All {count_after:,} rows have valid products")
     
     # ========================================
     # STEP 9: PARSE ZONE ENTRY TIMES
@@ -945,3 +1030,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
