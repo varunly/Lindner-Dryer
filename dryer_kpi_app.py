@@ -1596,7 +1596,7 @@ Difference: {abs(calculated_kwh_m3 - avg_kwh_per_m3):.1f} kWh/m³
     
                 st.success("✅ Analysis complete!")
     
-        except Exception as e:
-            st.error(f"❌ Display error: {e}")
-            with st.expander("Details"):
-                st.exception(e)
+    except Exception as e:
+        st.error(f"❌ Display error: {e}")
+        with st.expander("Details"):
+            st.exception(e)
