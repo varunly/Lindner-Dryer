@@ -329,11 +329,9 @@ def parse_wagon(df: pd.DataFrame, trockner: str = None) -> pd.DataFrame:
     """
     Parse wagon data with CORRECT Trockner filtering.
     
-    Expected for Trockner A: ~3692 rows
-    
-    Key columns:
-    - Column A (WG-Nr.): Wagon number
-    - Trock-: "A" or "B"
+    Key columns (with line breaks in original):
+    - 'WG-\\nNr' → Wagon number
+    - 'Trock-\\nner' → "A" or "B"
     - m³: Volume per wagon
     """
     logger.info("="*70)
@@ -348,14 +346,18 @@ def parse_wagon(df: pd.DataFrame, trockner: str = None) -> pd.DataFrame:
     
     # ========================================
     # STEP 1: CLEAN COLUMN NAMES
+    # Remove newlines and extra spaces
     # ========================================
     original_columns = list(df.columns)
-    df.columns = [str(c).replace("\n", " ").strip() for c in df.columns]
+    
+    # Replace newlines with empty string (not space) to join split words
+    df.columns = [str(c).replace("\n", "").replace("\r", "").strip() for c in df.columns]
     
     logger.info(f"Columns after cleaning ({len(df.columns)}):")
     for i, (orig, clean) in enumerate(zip(original_columns[:30], df.columns[:30])):
+        orig_repr = repr(orig)  # Show escape characters
         if str(orig) != clean:
-            logger.info(f"  [{i:2d}] '{orig}' → '{clean}'")
+            logger.info(f"  [{i:2d}] {orig_repr} → '{clean}'")
         else:
             logger.info(f"  [{i:2d}] '{clean}'")
     
@@ -363,28 +365,59 @@ def parse_wagon(df: pd.DataFrame, trockner: str = None) -> pd.DataFrame:
     # STEP 2: FIND KEY COLUMNS
     # ========================================
     
-    # Find Trockner column - look for "Trock-" specifically
+    # Find Trockner column - now looking for "Trockner" (after removing newline)
     trockner_col = None
+    trockner_patterns = ["Trockner", "Trock-ner", "Trock- ner", "Trock-"]
+    
     for col in df.columns:
         col_clean = str(col).strip()
-        # Exact match for "Trock-"
-        if col_clean == "Trock-":
-            trockner_col = col
-            logger.info(f"  → Found Trockner column (exact): '{col}'")
+        # Check various patterns
+        for pattern in trockner_patterns:
+            if col_clean == pattern or col_clean.lower() == pattern.lower():
+                trockner_col = col
+                logger.info(f"  → Found Trockner column: '{col}'")
+                break
+        if trockner_col:
             break
-        # Partial match
-        elif "Trock" in col_clean:
-            trockner_col = col
-            logger.info(f"  → Found Trockner column (partial): '{col}'")
-            break
+    
+    # Fallback: partial match
+    if not trockner_col:
+        for col in df.columns:
+            col_lower = str(col).lower()
+            if "trock" in col_lower:
+                trockner_col = col
+                logger.info(f"  → Found Trockner column (partial match): '{col}'")
+                break
     
     if not trockner_col:
-        logger.warning("  → Trockner column 'Trock-' NOT FOUND!")
+        logger.warning("  → Trockner column NOT FOUND!")
         logger.warning(f"  → Available columns: {list(df.columns)[:20]}")
     
-    # Find wagon number column (first column)
-    wagon_col = df.columns[0]
-    logger.info(f"  → Using wagon column: '{wagon_col}'")
+    # Find wagon number column - now looking for "WG-Nr" (after removing newline)
+    wagon_col = None
+    wagon_patterns = ["WG-Nr", "WG-Nr.", "WGNr", "WG Nr", "WG_Nr"]
+    
+    for col in df.columns:
+        col_clean = str(col).strip()
+        for pattern in wagon_patterns:
+            if col_clean == pattern or col_clean.lower() == pattern.lower():
+                wagon_col = col
+                logger.info(f"  → Found wagon column: '{col}'")
+                break
+        if wagon_col:
+            break
+    
+    # Fallback: first column or partial match
+    if not wagon_col:
+        for col in df.columns:
+            if "wg" in str(col).lower():
+                wagon_col = col
+                logger.info(f"  → Found wagon column (partial): '{col}'")
+                break
+    
+    if not wagon_col:
+        wagon_col = df.columns[0]
+        logger.info(f"  → Using first column as wagon: '{wagon_col}'")
     
     # Find volume column (m³)
     volume_col = None
@@ -458,6 +491,9 @@ def parse_wagon(df: pd.DataFrame, trockner: str = None) -> pd.DataFrame:
             raise ValueError(f"No rows found for Trockner {trockner}")
     elif trockner and not trockner_col:
         logger.warning(f"⚠️ Cannot filter by Trockner - column not found!")
+    else:
+        # No filter requested, clean up temp column
+        df = df.drop(columns=["_trockner_raw"], errors="ignore")
     
     # ========================================
     # STEP 5: GET VOLUME FROM m³ COLUMN
@@ -473,6 +509,9 @@ def parse_wagon(df: pd.DataFrame, trockner: str = None) -> pd.DataFrame:
         logger.info(f"  Valid volumes (>0): {valid_volumes.sum():,}")
         logger.info(f"  Invalid/zero: {(~valid_volumes).sum():,}")
         
+        # DON'T filter out zero volumes yet - count them first
+        zero_volume_count = (df["m3"] == 0).sum() + df["m3"].isna().sum()
+        
         # Filter out invalid volumes
         count_before_vol = len(df)
         df = df[df["m3"] > 0].copy()
@@ -481,9 +520,10 @@ def parse_wagon(df: pd.DataFrame, trockner: str = None) -> pd.DataFrame:
         if count_before_vol != count_after_vol:
             logger.info(f"  Removed {count_before_vol - count_after_vol} rows with invalid volume")
         
-        logger.info(f"  Volume range: {df['m3'].min():.4f} - {df['m3'].max():.4f} m³")
-        logger.info(f"  Total volume: {df['m3'].sum():,.2f} m³")
-        logger.info(f"  Mean volume:  {df['m3'].mean():.4f} m³")
+        if not df.empty:
+            logger.info(f"  Volume range: {df['m3'].min():.4f} - {df['m3'].max():.4f} m³")
+            logger.info(f"  Total volume: {df['m3'].sum():,.2f} m³")
+            logger.info(f"  Mean volume:  {df['m3'].mean():.4f} m³")
     else:
         logger.error("Volume column not found! Using default 3.5 m³")
         df["m3"] = 3.5
@@ -491,26 +531,39 @@ def parse_wagon(df: pd.DataFrame, trockner: str = None) -> pd.DataFrame:
     # ========================================
     # STEP 6: RENAME WAGON COLUMN
     # ========================================
-    if wagon_col != "WG_Nr":
+    if wagon_col and wagon_col != "WG_Nr" and wagon_col in df.columns:
         df = df.rename(columns={wagon_col: "WG_Nr"})
+    elif "WG_Nr" not in df.columns:
+        # Use first column
+        df = df.rename(columns={df.columns[0]: "WG_Nr"})
     
     # ========================================
     # STEP 7: PARSE TIMESTAMPS AND OTHER COLUMNS
     # ========================================
     
-    # Timestamps
-    if "Pressdat. + Zeit" in df.columns:
-        df["t0"] = pd.to_datetime(df["Pressdat. + Zeit"], errors="coerce")
-    else:
-        date_col = None
-        time_col = None
+    # Also clean other column names that might have newlines
+    # Look for common columns with flexible matching
+    
+    def find_col(patterns):
+        """Find column matching any pattern."""
         for col in df.columns:
-            if "Datum" in col or "datum" in col.lower():
-                date_col = col
-            if "Zeit" in col and "Entnahme" not in col:
-                time_col = col
+            col_lower = str(col).lower()
+            for p in patterns:
+                if p.lower() in col_lower:
+                    return col
+        return None
+    
+    # Timestamps - look for press date/time
+    press_col = find_col(["Pressdat", "Press dat", "Pressdatum"])
+    
+    if press_col:
+        df["t0"] = pd.to_datetime(df[press_col], errors="coerce")
+    else:
+        # Try combining date and time columns
+        date_col = find_col(["Datum"])
+        time_col = find_col(["Zeit"])
         
-        if date_col and time_col:
+        if date_col and time_col and "Entnahme" not in str(time_col):
             df["t0"] = pd.to_datetime(
                 df[date_col].astype(str) + " " + df[time_col].astype(str),
                 errors="coerce"
@@ -519,27 +572,36 @@ def parse_wagon(df: pd.DataFrame, trockner: str = None) -> pd.DataFrame:
             df["t0"] = pd.NaT
     
     # Product
-    if "Produkt" in df.columns:
-        df["Produkt"] = df["Produkt"].astype(str).str.strip()
-    else:
+    produkt_col = find_col(["Produkt", "Product"])
+    if produkt_col:
+        df["Produkt"] = df[produkt_col].astype(str).str.strip()
+    elif "Produkt" not in df.columns:
         df["Produkt"] = "Unknown"
     
     # Filter out rows without valid product
     valid_products = list(PRODUCT_SPECIFICATIONS.keys())
+    count_before_prod = len(df)
     df = df[df["Produkt"].isin(valid_products)].copy()
+    count_after_prod = len(df)
+    
+    if count_before_prod != count_after_prod:
+        logger.info(f"Removed {count_before_prod - count_after_prod} rows with invalid product")
     
     # Zone entry times
     for z in ("Z2", "Z3", "Z4", "Z5"):
-        col = f"In {z}"
-        if col in df.columns:
-            df[f"{z}_in"] = pd.to_datetime(df[col], errors="coerce", dayfirst=True)
+        col_pattern = f"In {z}"
+        zone_col = find_col([col_pattern, f"In{z}"])
+        if zone_col:
+            df[f"{z}_in"] = pd.to_datetime(df[zone_col], errors="coerce", dayfirst=True)
         else:
             df[f"{z}_in"] = pd.NaT
     
     df["Z1_in"] = df["t0"]
     
-    if "Entnahme-Zeit" in df.columns:
-        df["Entnahme"] = pd.to_datetime(df["Entnahme-Zeit"], errors="coerce", dayfirst=True)
+    # Entnahme (removal) time
+    entnahme_col = find_col(["Entnahme-Zeit", "EntnahmeZeit", "Entnahme Zeit"])
+    if entnahme_col:
+        df["Entnahme"] = pd.to_datetime(df[entnahme_col], errors="coerce", dayfirst=True)
     else:
         df["Entnahme"] = pd.NaT
     
@@ -560,7 +622,7 @@ def parse_wagon(df: pd.DataFrame, trockner: str = None) -> pd.DataFrame:
             df[f"{z}_dur_calc"] = np.nan
     
     for z in CONFIG["zones_seq"]:
-        txt = f"Zeit in {z}"
+        txt_col = find_col([f"Zeit in {z}", f"Zeitin{z}"])
         calc = f"{z}_dur_calc"
         out = f"{z}_dur"
         
@@ -569,8 +631,8 @@ def parse_wagon(df: pd.DataFrame, trockner: str = None) -> pd.DataFrame:
         else:
             df[out] = pd.NaT
         
-        if txt in df.columns:
-            parsed = parse_duration_series(df[txt])
+        if txt_col:
+            parsed = parse_duration_series(df[txt_col])
             mask = parsed.isna() | (parsed.dt.total_seconds() < 3600)
             if out in df.columns:
                 df[out] = parsed.where(~mask, df[out])
@@ -599,7 +661,7 @@ def parse_wagon(df: pd.DataFrame, trockner: str = None) -> pd.DataFrame:
     logger.info("="*70)
     
     total_rows = len(df)
-    total_vol = df["m3"].sum()
+    total_vol = df["m3"].sum() if not df.empty else 0
     avg_vol = df["m3"].mean() if total_rows > 0 else 0
     
     # By product
@@ -617,10 +679,6 @@ def parse_wagon(df: pd.DataFrame, trockner: str = None) -> pd.DataFrame:
     logger.info("-"*70)
     logger.info(f"TOTAL: {total_rows:,} wagon rows | {total_vol:,.2f} m³ | {avg_vol:.4f} m³/row")
     logger.info("="*70)
-    
-    # Validation check
-    if trockner == "A" and total_rows != 3692:
-        logger.warning(f"⚠️ Expected 3692 rows for Trockner A, got {total_rows}")
     
     return df
 
@@ -938,3 +996,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
