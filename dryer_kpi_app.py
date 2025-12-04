@@ -210,7 +210,7 @@ def run_analysis(energy_path: str, wagon_path: str, products_filter, month_filte
     Wagon counting method:
     - Each row in Column A (WG-Nr) with a valid wagon number = 1 wagon
     - If Trockner filter is applied, only count wagons for that Trockner
-    - Volume is read directly from the m³ column
+    - Volume is read directly from the m³ column (AA)
     """
     progress = st.progress(0)
     status = st.empty()
@@ -494,25 +494,28 @@ if st.session_state.analysis_complete and st.session_state.results:
             st.warning("⚠️ No data available after filtering.")
         else:
             # ============================================================
-            #   CORRECT WAGON AND VOLUME CALCULATION
+            #   CORRECT WAGON AND VOLUME CALCULATION (UNIQUE WAGONS)
             # ============================================================
             
-            # WAGON COUNT: Number of rows in wagons DataFrame
-            total_wagons = len(wagons_df)
+            # Get unique wagons only (each WG_Nr counted once)
+            wagons_unique = wagons_df.drop_duplicates(subset=["WG_Nr"]).copy()
             
-            # VOLUME: Sum of m³ column from wagons DataFrame
-            total_volume = wagons_df["m3"].sum()
+            # WAGON COUNT: Number of unique wagon numbers
+            total_wagons = len(wagons_unique)
             
-            # Average volume per wagon
-            avg_volume_per_wagon = total_volume / total_wagons if total_wagons > 0 else 0
+            # VOLUME: Sum of m³ column from unique wagons only
+            total_volume = wagons_unique["m3"].sum()
+            
+            # Average volume per wagon: Direct mean from m³ column (AA)
+            avg_volume_per_wagon = wagons_unique["m3"].mean()
 
             # ===== ENERGY TOTALS =====
             total_thermal = float(yearly["Energy_thermal_kWh"].sum())
             total_electrical = float(yearly["Energy_electrical_kWh"].sum())
             total_energy = float(yearly["Energy_kWh"].sum())
 
-            # ===== WATER CALCULATION =====
-            product_volume_unique = wagons_df.groupby("Produkt")["m3"].sum().reset_index()
+            # ===== WATER CALCULATION (using unique wagons) =====
+            product_volume_unique = wagons_unique.groupby("Produkt")["m3"].sum().reset_index()
             
             water_calc_details = []
             total_water = 0.0
@@ -520,7 +523,7 @@ if st.session_state.analysis_complete and st.session_state.results:
             for _, row in product_volume_unique.iterrows():
                 prod = row["Produkt"]
                 vol = row["m3"]
-                wagon_count_prod = len(wagons_df[wagons_df["Produkt"] == prod])
+                wagon_count_prod = len(wagons_unique[wagons_unique["Produkt"] == prod])
                 
                 if prod in PRODUCT_SPECIFICATIONS:
                     spec = PRODUCT_SPECIFICATIONS[prod]
@@ -775,16 +778,17 @@ electrical_pct = (total_electrical / total_energy) × 100
                 
                 **Important Notes:**
                 - Water is calculated **per product** based on the formula-derived water content
-                - Volume comes from wagon tracking data (unique per wagon, NOT multiplied by zones)
+                - Volume comes from wagon tracking data (unique wagons, m³ column AA)
                 - Energy is the total allocated energy from all zones
                 """)
                 
                 st.markdown("---")
-                st.markdown("### 📦 Step 1: Volume from Wagons")
+                st.markdown("### 📦 Step 1: Volume from Unique Wagons")
                 st.code(f"""
-Total Wagons: {total_wagons:,}
+Total Unique Wagons: {total_wagons:,}
 Total Volume: {total_volume:,.2f} m³
 Average Volume/Wagon: {avg_volume_per_wagon:.4f} m³
+Source: m³ column (AA) from Hordenwagen file
                 """, language="text")
                 
                 st.markdown("### 💧 Step 2: Water Calculation per Product")
@@ -837,18 +841,27 @@ Difference: {abs(calculated_kwh_m3 - avg_kwh_per_m3):.1f} kWh/m³
                 wagons_before_str = f"{wagons_before:,}" if wagons_before is not None else "N/A"
                 wagons_after_str = f"{wagons_after:,}" if wagons_after is not None else "N/A"
                 
+                # Count unique wagon numbers
+                unique_wagon_count = wagons_df["WG_Nr"].nunique()
+                total_rows = len(wagons_df)
+                
                 st.markdown(f"""
                 **How wagons are counted:**
                 1. **Column A (WG-Nr)** in the Excel file contains wagon numbers
-                2. Each row with a valid wagon number = **1 wagon**
+                2. Each **unique wagon number** = **1 wagon**
                 3. Invalid rows (headers, summaries, empty) are excluded
                 4. Trockner filter: **{applied_trockner}**
                 
-                **Current counts:**
+                **Counting details:**
+                - Total rows in filtered data: **{total_rows:,}**
+                - Unique wagon numbers (WG_Nr): **{unique_wagon_count:,}**
                 - Wagons before product filter: **{wagons_before_str}**
                 - Wagons after product filter: **{wagons_after_str}**
-                - Final wagon count: **{total_wagons:,}**
+                - **Final wagon count: {total_wagons:,}**
                 """)
+                
+                if total_rows != unique_wagon_count:
+                    st.warning(f"⚠️ Note: {total_rows - unique_wagon_count} duplicate wagon entries were found and removed for counting.")
                 
                 st.markdown("---")
                 st.markdown("### 📊 Summary Statistics")
@@ -857,27 +870,36 @@ Difference: {abs(calculated_kwh_m3 - avg_kwh_per_m3):.1f} kWh/m³
                 
                 with col_s1:
                     st.metric("Total Wagons", f"{total_wagons:,}")
+                    st.caption("Unique wagon numbers")
                 with col_s2:
                     st.metric("Total Volume", f"{total_volume:,.2f} m³")
+                    st.caption(f"Sum of m³ column (AA)")
                 with col_s3:
                     st.metric("Avg Volume/Wagon", f"{avg_volume_per_wagon:.4f} m³")
+                    st.caption("Mean of m³ column (AA)")
                 with col_s4:
-                    unique_products = wagons_df["Produkt"].nunique()
+                    unique_products = wagons_unique["Produkt"].nunique()
                     st.metric("Unique Products", f"{unique_products}")
                 
                 st.markdown("---")
-                st.markdown("### 📦 Breakdown by Product")
+                st.markdown("### 📦 Breakdown by Product (Unique Wagons Only)")
                 
-                product_breakdown = wagons_df.groupby("Produkt").agg({
-                    "m3": ["count", "sum", "mean", "min", "max"]
+                # Use unique wagons for breakdown
+                product_breakdown = wagons_unique.groupby("Produkt").agg({
+                    "WG_Nr": "count",  # Count unique wagons
+                    "m3": ["sum", "mean", "min", "max"]
                 }).round(4)
+                
+                # Flatten column names
                 product_breakdown.columns = ["Wagon Count", "Total Volume (m³)", "Avg Volume (m³)", "Min Volume (m³)", "Max Volume (m³)"]
                 product_breakdown = product_breakdown.reset_index()
                 product_breakdown = product_breakdown.sort_values("Total Volume (m³)", ascending=False)
                 
+                # Add percentage columns
                 product_breakdown["% of Wagons"] = (product_breakdown["Wagon Count"] / total_wagons * 100).round(1)
                 product_breakdown["% of Volume"] = (product_breakdown["Total Volume (m³)"] / total_volume * 100).round(1)
                 
+                # Display table
                 st.dataframe(
                     product_breakdown,
                     use_container_width=True,
@@ -894,13 +916,16 @@ Difference: {abs(calculated_kwh_m3 - avg_kwh_per_m3):.1f} kWh/m³
                     }
                 )
                 
-                st.markdown(f"**Totals:** {total_wagons:,} wagons | {total_volume:,.2f} m³ | {avg_volume_per_wagon:.4f} m³/wagon")
+                st.markdown(f"""
+                **Totals:** {total_wagons:,} unique wagons | {total_volume:,.2f} m³ | {avg_volume_per_wagon:.4f} m³/wagon (mean from AA column)
+                """)
                 
                 st.markdown("---")
-                st.markdown("### 📅 Breakdown by Month")
+                st.markdown("### 📅 Breakdown by Month (Unique Wagons)")
                 
-                monthly_breakdown = wagons_df.groupby("Month").agg({
-                    "m3": ["count", "sum", "mean"]
+                monthly_breakdown = wagons_unique.groupby("Month").agg({
+                    "WG_Nr": "count",
+                    "m3": ["sum", "mean"]
                 }).round(4)
                 monthly_breakdown.columns = ["Wagon Count", "Total Volume (m³)", "Avg Volume (m³)"]
                 monthly_breakdown = monthly_breakdown.reset_index()
@@ -918,12 +943,12 @@ Difference: {abs(calculated_kwh_m3 - avg_kwh_per_m3):.1f} kWh/m³
                 )
                 
                 st.markdown("---")
-                st.markdown("### 🔍 Sample Wagon Data (First 20 rows)")
+                st.markdown("### 🔍 Sample Wagon Data (First 20 unique wagons)")
                 
                 sample_cols = ["WG_Nr", "Produkt", "m3", "Month", "t0", "Trockner"]
-                available_cols = [c for c in sample_cols if c in wagons_df.columns]
+                available_cols = [c for c in sample_cols if c in wagons_unique.columns]
                 
-                sample_df = wagons_df[available_cols].head(20).copy()
+                sample_df = wagons_unique[available_cols].head(20).copy()
                 if "t0" in sample_df.columns:
                     sample_df["t0"] = sample_df["t0"].dt.strftime("%Y-%m-%d %H:%M")
                 
@@ -932,22 +957,52 @@ Difference: {abs(calculated_kwh_m3 - avg_kwh_per_m3):.1f} kWh/m³
                 st.markdown("---")
                 st.markdown("### ✅ Validation")
                 
+                # Check if volume sums match
                 volume_from_breakdown = product_breakdown["Total Volume (m³)"].sum()
                 wagon_count_from_breakdown = int(product_breakdown["Wagon Count"].sum())
+                avg_from_mean = wagons_unique["m3"].mean()
                 
-                col_v1, col_v2 = st.columns(2)
+                col_v1, col_v2, col_v3 = st.columns(3)
                 
                 with col_v1:
                     if abs(volume_from_breakdown - total_volume) < 0.01:
-                        st.success(f"✅ Volume check passed: {total_volume:,.2f} m³")
+                        st.success(f"✅ Volume check: {total_volume:,.2f} m³")
                     else:
                         st.error(f"❌ Volume mismatch: {total_volume:,.2f} vs {volume_from_breakdown:,.2f}")
                 
                 with col_v2:
                     if wagon_count_from_breakdown == total_wagons:
-                        st.success(f"✅ Wagon count check passed: {total_wagons:,} wagons")
+                        st.success(f"✅ Wagon count: {total_wagons:,}")
                     else:
-                        st.error(f"❌ Wagon count mismatch: {total_wagons:,} vs {wagon_count_from_breakdown:,}")
+                        st.error(f"❌ Count mismatch: {total_wagons:,} vs {wagon_count_from_breakdown:,}")
+                
+                with col_v3:
+                    if abs(avg_from_mean - avg_volume_per_wagon) < 0.0001:
+                        st.success(f"✅ Avg volume: {avg_volume_per_wagon:.4f} m³")
+                    else:
+                        st.error(f"❌ Avg mismatch: {avg_volume_per_wagon:.4f} vs {avg_from_mean:.4f}")
+                
+                # Additional debugging info
+                st.markdown("---")
+                st.markdown("### 🔧 Debug Information")
+                
+                st.code(f"""
+Wagon Count Calculation:
+- Total rows in wagons_df: {len(wagons_df):,}
+- Unique wagon numbers (WG_Nr): {wagons_df["WG_Nr"].nunique():,}
+- Duplicates removed: {len(wagons_df) - wagons_df["WG_Nr"].nunique():,}
+- Final count: {total_wagons:,}
+
+Volume Calculation:
+- Total volume (sum of m³): {total_volume:,.2f} m³
+- Average volume (mean of m³): {avg_volume_per_wagon:.4f} m³
+- Source: Column AA (m³) from Hordenwagen file
+
+Verification:
+- Sum ÷ Count = {total_volume / total_wagons:.4f} m³
+- Direct mean = {wagons_unique["m3"].mean():.4f} m³
+- Match: {"✅ Yes" if abs(total_volume/total_wagons - avg_volume_per_wagon) < 0.0001 else "❌ No"}
+                """, language="text")
 
             # ===== 2. ZONE COMPARISON =====
             st.markdown('<div class="section-header">📉 Zone Comparison</div>', unsafe_allow_html=True)
@@ -1481,7 +1536,7 @@ Difference: {abs(calculated_kwh_m3 - avg_kwh_per_m3):.1f} kWh/m³
                 unsafe_allow_html=True
             )
 
-            wagon_stats = compute_product_wagon_stats(wagons_df)
+            wagon_stats = compute_product_wagon_stats(wagons_unique)
             wagon_capacity = wagon_stats.get("wagon_capacity_m3", {})
 
             baseline_kwh_m3 = float(yearly["kWh_per_m3"].mean()) if len(yearly) > 0 else 0.0
@@ -1580,23 +1635,23 @@ Difference: {abs(calculated_kwh_m3 - avg_kwh_per_m3):.1f} kWh/m³
                 else:
                     st.warning("⚠️ Enter wagon counts for at least one product.")
 
-                        # ===== 8. EXPORT =====
-                st.markdown(
-                    '<div class="section-header">📥 Export Results</div>',
-                    unsafe_allow_html=True
-                )
-    
-                excel_data = create_excel_download(results)
-                st.download_button(
-                    "📥 Download Complete Excel Report",
-                    excel_data,
-                    f"Dryer_KPI_Analysis_Trockner_{applied_trockner}.xlsx",
-                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
-    
-                st.success("✅ Analysis complete!")
-    
+            # ===== 8. EXPORT =====
+            st.markdown(
+                '<div class="section-header">📥 Export Results</div>',
+                unsafe_allow_html=True
+            )
+
+            excel_data = create_excel_download(results)
+            st.download_button(
+                label="📥 Download Complete Excel Report",
+                data=excel_data,
+                file_name=f"Dryer_KPI_Analysis_Trockner_{applied_trockner}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+
+            st.success("✅ Analysis complete!")
+
     except Exception as e:
         st.error(f"❌ Display error: {e}")
-        with st.expander("Details"):
+        with st.expander("🔍 View Error Details"):
             st.exception(e)
