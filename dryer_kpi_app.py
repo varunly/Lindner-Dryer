@@ -1580,17 +1580,23 @@ Difference: {abs(calculated_kwh_m3 - avg_kwh_per_m3):.1f} kWh/m³
                 else:
                     st.warning("⚠️ Enter wagon counts for at least one product.")
 
-            # ===== 8. EXPORT =====
-            st.markdown(
-                '<div class="section-header">📥 Export Results</div>',
-                unsafe_allow_html=True
-            )
-
-            excel_data = create_excel_download(results)
-            st.download_button(
-                "📥 Download Complete Excel Report",
-                excel_data,
-                f"Dryer_KPI_Analysis_Trockner_{applied_trockner}.xlsx",
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-            
-
+                        # ===== 8. EXPORT =====
+                st.markdown(
+                    '<div class="section-header">📥 Export Results</div>',
+                    unsafe_allow_html=True
+                )
+    
+                excel_data = create_excel_download(results)
+                st.download_button(
+                    "📥 Download Complete Excel Report",
+                    excel_data,
+                    f"Dryer_KPI_Analysis_Trockner_{applied_trockner}.xlsx",
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+    
+                st.success("✅ Analysis complete!")
+    
+        except Exception as e:
+            st.error(f"❌ Display error: {e}")
+            with st.expander("Details"):
+                st.exception(e)
