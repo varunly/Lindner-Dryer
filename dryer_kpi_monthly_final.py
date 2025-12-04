@@ -1,8 +1,9 @@
 # dryer_kpi_monthly_final.py
 """
 Lindner Dryer KPI Calculation Module
-UPDATED: Support for Trockner A and Trockner B filtering
-Column: "Trock-" with values "A" or "B"
+UPDATED: 
+- Support for Trockner A and Trockner B filtering (column "Trock-")
+- Direct volume reading from "m³" column (column AA, row 7)
 """
 
 import pandas as pd
@@ -15,17 +16,19 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-# Trockner column configuration
-TROCKNER_COLUMN = "Trock-"  # Exact column name in Hordenwagenverfolgung
+# Column configurations
+TROCKNER_COLUMN = "Trock-"  # Column for Trockner A/B
+VOLUME_COLUMN = "m³"        # Column AA with volume per wagon
 
 CONFIG = {
     "energy_sheet": 0,
     "wagon_sheet": "Hordenwagenverfolgung",
-    "wagon_header_row": 6,
+    "wagon_header_row": 6,  # Row 7 in Excel (0-indexed = 6)
     "gas_to_kwh": 11.5,
     "zones_seq": ["Z1", "Z2", "Z3", "Z4", "Z5"],
     "num_thermal_zones": 4,
     "trockner_column": TROCKNER_COLUMN,
+    "volume_column": VOLUME_COLUMN,
 }
 
 ZONE_ENERGY_MAPPING = {
@@ -301,6 +304,38 @@ def parse_energy(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def find_volume_column(df: pd.DataFrame) -> Optional[str]:
+    """Find the volume column (m³) in the dataframe."""
+    # Try exact match first
+    if VOLUME_COLUMN in df.columns:
+        return VOLUME_COLUMN
+    
+    # Try variations
+    for col in df.columns:
+        col_clean = str(col).strip()
+        if col_clean == "m³" or col_clean == "m3" or "m³" in col_clean or "m3" in col_clean.lower():
+            logger.info(f"  → Found volume column: '{col}'")
+            return col
+    
+    return None
+
+
+def find_trockner_column(df: pd.DataFrame) -> Optional[str]:
+    """Find the Trockner column in the dataframe."""
+    # Try exact match first
+    if TROCKNER_COLUMN in df.columns:
+        return TROCKNER_COLUMN
+    
+    # Try variations
+    for col in df.columns:
+        col_clean = str(col).strip()
+        if col_clean.startswith("Trock") or "Trock" in col_clean:
+            logger.info(f"  → Found Trockner column: '{col}'")
+            return col
+    
+    return None
+
+
 def filter_wagons_by_trockner(df: pd.DataFrame, trockner: str) -> pd.DataFrame:
     """
     Filter wagon data by Trockner using the 'Trock-' column.
@@ -314,20 +349,15 @@ def filter_wagons_by_trockner(df: pd.DataFrame, trockner: str) -> pd.DataFrame:
     """
     logger.info(f"Filtering wagons for Trockner {trockner}...")
     
-    # Find the Trock- column (handle potential variations in column name after cleaning)
-    trockner_col = None
-    for col in df.columns:
-        col_clean = str(col).strip()
-        if col_clean == TROCKNER_COLUMN or col_clean.startswith("Trock"):
-            trockner_col = col
-            break
+    # Find the Trockner column
+    trockner_col = find_trockner_column(df)
     
     if trockner_col is None:
         logger.error(f"Column '{TROCKNER_COLUMN}' not found in wagon data!")
         logger.error(f"Available columns: {list(df.columns)}")
-        raise ValueError(f"Trockner column '{TROCKNER_COLUMN}' not found. Available columns: {list(df.columns)[:10]}")
+        raise ValueError(f"Trockner column '{TROCKNER_COLUMN}' not found. Available columns: {list(df.columns)[:15]}")
     
-    logger.info(f"  → Using column: '{trockner_col}'")
+    logger.info(f"  → Using Trockner column: '{trockner_col}'")
     
     # Get unique values before filtering
     unique_values = df[trockner_col].dropna().astype(str).str.strip().str.upper().unique()
@@ -363,6 +393,7 @@ def filter_wagons_by_trockner(df: pd.DataFrame, trockner: str) -> pd.DataFrame:
 def parse_wagon(df: pd.DataFrame, trockner: str = None) -> pd.DataFrame:
     """
     Parse wagon data with Trockner filtering.
+    Uses the 'm³' column directly from Excel for volume.
     
     Args:
         df: Raw wagon DataFrame
@@ -374,11 +405,34 @@ def parse_wagon(df: pd.DataFrame, trockner: str = None) -> pd.DataFrame:
     # Clean column names (remove newlines, strip whitespace)
     df.columns = [str(c).replace("\n", " ").strip() for c in df.columns]
     
-    logger.info(f"  → Columns after cleaning: {list(df.columns)[:15]}...")
+    logger.info(f"  → Found {len(df.columns)} columns")
+    logger.info(f"  → Sample columns: {list(df.columns)[:10]}...")
 
     # ===== FILTER BY TROCKNER FIRST =====
     if trockner:
         df = filter_wagons_by_trockner(df, trockner)
+
+    # ===== GET VOLUME FROM 'm³' COLUMN =====
+    volume_col = find_volume_column(df)
+    
+    if volume_col:
+        logger.info(f"  → Using volume column: '{volume_col}'")
+        df["m3"] = pd.to_numeric(df[volume_col], errors='coerce').fillna(0)
+        
+        # Check for invalid volumes
+        invalid_volumes = (df["m3"] <= 0).sum()
+        if invalid_volumes > 0:
+            logger.warning(f"  → {invalid_volumes} rows have invalid volume (≤0), will be filtered out")
+        
+        # Remove rows with zero or negative volume
+        df = df[df["m3"] > 0].copy()
+        
+        logger.info(f"  → Volume range: {df['m3'].min():.3f} - {df['m3'].max():.3f} m³")
+        logger.info(f"  → Average volume per wagon: {df['m3'].mean():.3f} m³")
+    else:
+        logger.error(f"Volume column '{VOLUME_COLUMN}' not found!")
+        logger.error(f"Available columns: {list(df.columns)}")
+        raise ValueError(f"Volume column '{VOLUME_COLUMN}' not found. Please check the Excel file.")
 
     # Parse timestamps
     if "Pressdat. + Zeit" in df.columns:
@@ -399,44 +453,25 @@ def parse_wagon(df: pd.DataFrame, trockner: str = None) -> pd.DataFrame:
     else:
         df["Produkt"] = "Unknown"
 
-    # Calculate volume per wagon
-    def get_wagon_volume(product):
-        if product in PRODUCT_SPECIFICATIONS:
-            spec = PRODUCT_SPECIFICATIONS[product]
-            edge_m = spec["edge_length_mm"] / 1000.0
-            thick_m = spec["final_thickness_mm"] / 1000.0
-            volume_per_plate = edge_m * edge_m * thick_m
-            volume_per_wagon = PLATES_PER_WAGON * volume_per_plate
-            return volume_per_wagon
-        else:
-            logger.warning(f"Unknown product: {product}, using default volume")
-            return 3.0
-    
-    df["m3"] = df["Produkt"].apply(get_wagon_volume)
-    
-    # Log summary
+    # ===== LOG SUMMARY =====
     trockner_label = f"TROCKNER {trockner}" if trockner else "ALL TROCKNER"
     logger.info(f"\n{'='*60}")
     logger.info(f"WAGON & VOLUME SUMMARY - {trockner_label}")
-    logger.info(f"({PLATES_PER_WAGON} plates/wagon)")
+    logger.info(f"(Volume read directly from '{volume_col}' column)")
     logger.info(f"{'='*60}")
     
+    # Group by product
     product_summary = df.groupby("Produkt").agg({
-        "WG_Nr": "count" if "WG_Nr" in df.columns else "size",
-        "m3": "first"
+        "m3": ["count", "sum", "mean"]
     })
-    if "WG_Nr" in product_summary.columns:
-        product_summary = product_summary.rename(columns={"WG_Nr": "Wagon_Count"})
-    else:
-        product_summary["Wagon_Count"] = df.groupby("Produkt").size()
-    product_summary = product_summary.rename(columns={"m3": "Volume_per_Wagon"})
-    
-    product_summary["Total_Volume"] = product_summary["Wagon_Count"] * product_summary["Volume_per_Wagon"]
+    product_summary.columns = ["Wagon_Count", "Total_Volume", "Avg_Volume"]
     product_summary = product_summary.sort_values("Total_Volume", ascending=False)
     
     for prod, row in product_summary.iterrows():
         logger.info(
-            f"{prod:6s}: {row['Wagon_Count']:5.0f} wagons × {row['Volume_per_Wagon']:5.2f} m³/wagon = {row['Total_Volume']:8.1f} m³"
+            f"{prod:6s}: {row['Wagon_Count']:5.0f} wagons | "
+            f"Total: {row['Total_Volume']:8.2f} m³ | "
+            f"Avg: {row['Avg_Volume']:.3f} m³/wagon"
         )
     
     total_wagons = product_summary["Wagon_Count"].sum()
@@ -444,7 +479,7 @@ def parse_wagon(df: pd.DataFrame, trockner: str = None) -> pd.DataFrame:
     avg_volume = total_volume / total_wagons if total_wagons > 0 else 0
     
     logger.info(f"{'='*60}")
-    logger.info(f"TOTAL: {total_wagons:,.0f} wagons = {total_volume:,.1f} m³ (avg {avg_volume:.2f} m³/wagon)")
+    logger.info(f"TOTAL: {total_wagons:,.0f} wagons = {total_volume:,.2f} m³ (avg {avg_volume:.3f} m³/wagon)")
     logger.info(f"{'='*60}\n")
 
     # Parse zone entry times
@@ -524,7 +559,7 @@ def explode_intervals(df: pd.DataFrame) -> pd.DataFrame:
             rows.append({
                 "WG_Nr": r.get("WG_Nr", ""),
                 "Produkt": r["Produkt"],
-                "m3": r["m3"],
+                "m3": r["m3"],  # Now using the actual volume from Excel
                 "Zone": z,
                 "P_start": s,
                 "P_end": e,
@@ -810,7 +845,7 @@ def compute_product_wagon_stats(wagons: pd.DataFrame) -> dict:
     stats = df.groupby("Produkt", as_index=False).agg(
         avg_m3_per_wagon=("m3", "mean"),
         avg_residence_h=("residence_h", "mean"),
-        wagon_count=("WG_Nr", "count") if "WG_Nr" in df.columns else ("m3", "count"),
+        wagon_count=("m3", "count"),
     )
     stats["avg_residence_days"] = stats["avg_residence_h"] / 24.0
 
@@ -828,6 +863,7 @@ def main():
     logger.info(f"Zones: {CONFIG['zones_seq']}")
     logger.info(f"Thermal zones mapped: {list(ZONE_ENERGY_MAPPING.keys())}")
     logger.info(f"Trockner column: '{TROCKNER_COLUMN}'")
+    logger.info(f"Volume column: '{VOLUME_COLUMN}'")
 
 
 if __name__ == "__main__":
