@@ -220,171 +220,147 @@ def validate_excel_file(file_path: str, file_description: str) -> bool:
 
 def run_analysis(energy_path: str, wagon_path: str, products_filter, month_filter, trockner_filter) -> dict:
     """
-    Run the complete KPI analysis with improved file reading.
+    Run the complete KPI analysis with detailed debugging.
     """
     progress = st.progress(0)
     status = st.empty()
+    
+    # Create debug container
+    debug_container = st.container()
 
     try:
         # ===== PARSE ENERGY =====
         status.text("🔄 Parsing energy data...")
         progress.progress(15)
         
-        # Try different methods to read energy file
         try:
             e_raw = pd.read_excel(energy_path, sheet_name=CONFIG["energy_sheet"])
-        except Exception as e1:
-            st.warning(f"⚠️ First attempt failed: {e1}")
-            st.info("🔄 Trying alternative method...")
+        except Exception as e:
             try:
-                # Try with openpyxl engine explicitly
                 e_raw = pd.read_excel(energy_path, sheet_name=CONFIG["energy_sheet"], engine='openpyxl')
-            except Exception as e2:
-                st.warning(f"⚠️ Second attempt failed: {e2}")
-                st.info("🔄 Trying xlrd engine...")
-                try:
-                    # Try with xlrd for older formats
-                    e_raw = pd.read_excel(energy_path, sheet_name=CONFIG["energy_sheet"], engine='xlrd')
-                except Exception as e3:
-                    raise ValueError(f"Cannot read energy file with any method. Last error: {e3}")
+            except:
+                raise ValueError(f"Cannot read energy file: {e}")
         
         e = parse_energy(e_raw)
         if e.empty:
             raise ValueError("Parsed energy data is empty.")
 
-        # ===== PARSE WAGON DATA WITH MULTIPLE METHODS =====
+        # ===== PARSE WAGON DATA =====
         status.text("🔄 Parsing wagon tracking data...")
         progress.progress(35)
         
-        w_raw = None
-        read_errors = []
-        
-        # Method 1: Standard pandas read_excel
         try:
-            st.info("📖 Attempting standard Excel read...")
             w_raw = pd.read_excel(
                 wagon_path,
                 sheet_name=CONFIG["wagon_sheet"],
                 header=CONFIG["wagon_header_row"],
             )
-            st.success("✅ Successfully read wagon file with standard method")
-        except Exception as e1:
-            read_errors.append(f"Standard read: {str(e1)[:100]}")
-            
-            # Method 2: Try with openpyxl engine (good for .xlsx/.xlsm)
+        except Exception as e:
             try:
-                st.info("📖 Attempting with openpyxl engine...")
                 w_raw = pd.read_excel(
                     wagon_path,
                     sheet_name=CONFIG["wagon_sheet"],
                     header=CONFIG["wagon_header_row"],
                     engine='openpyxl'
                 )
-                st.success("✅ Successfully read wagon file with openpyxl")
-            except Exception as e2:
-                read_errors.append(f"Openpyxl: {str(e2)[:100]}")
+            except:
+                raise ValueError(f"Cannot read wagon file: {e}")
+        
+        # ===== SHOW RAW DATA DEBUG INFO =====
+        with debug_container:
+            with st.expander("🔧 DEBUG: Raw Wagon File Analysis", expanded=True):
+                st.markdown("### 📄 Raw File Info")
+                st.write(f"**Total rows in raw file:** {len(w_raw):,}")
+                st.write(f"**Total columns:** {len(w_raw.columns)}")
                 
-                # Method 3: Try reading without specifying sheet name
-                try:
-                    st.info("📖 Attempting to read first sheet...")
-                    w_raw = pd.read_excel(
-                        wagon_path,
-                        sheet_name=0,  # First sheet
-                        header=CONFIG["wagon_header_row"],
-                    )
-                    st.success("✅ Successfully read wagon file from first sheet")
-                except Exception as e3:
-                    read_errors.append(f"First sheet: {str(e3)[:100]}")
+                # Show all column names
+                st.markdown("### 📋 Column Names")
+                col_list = list(w_raw.columns)
+                for i, col in enumerate(col_list[:40]):
+                    st.text(f"[{i:2d}] '{col}'")
+                
+                # Find and show Trockner column
+                st.markdown("### 🏭 Trockner Column Analysis")
+                trockner_col_found = None
+                for col in w_raw.columns:
+                    col_str = str(col).strip()
+                    if "Trock" in col_str or "trock" in col_str.lower():
+                        trockner_col_found = col
+                        break
+                
+                if trockner_col_found:
+                    st.success(f"Found Trockner column: **'{trockner_col_found}'**")
                     
-                    # Method 4: Try with xlrd for older formats
-                    try:
-                        st.info("📖 Attempting with xlrd engine (for .xls files)...")
-                        w_raw = pd.read_excel(
-                            wagon_path,
-                            sheet_name=CONFIG["wagon_sheet"],
-                            header=CONFIG["wagon_header_row"],
-                            engine='xlrd'
-                        )
-                        st.success("✅ Successfully read wagon file with xlrd")
-                    except Exception as e4:
-                        read_errors.append(f"xlrd: {str(e4)[:100]}")
-                        
-                        # Method 5: Try reading with no header specification
-                        try:
-                            st.info("📖 Attempting without header row specification...")
-                            w_raw = pd.read_excel(
-                                wagon_path,
-                                sheet_name=0,
-                            )
-                            # Skip to the correct row manually
-                            if CONFIG["wagon_header_row"] > 0:
-                                w_raw = w_raw.iloc[CONFIG["wagon_header_row"]:].reset_index(drop=True)
-                                w_raw.columns = w_raw.iloc[0]
-                                w_raw = w_raw[1:].reset_index(drop=True)
-                            st.success("✅ Successfully read wagon file with manual header processing")
-                        except Exception as e5:
-                            read_errors.append(f"No header: {str(e5)[:100]}")
-                            
-                            # Method 6: Try with calamine engine (fast reader)
-                            try:
-                                st.info("📖 Attempting with calamine engine...")
-                                import warnings
-                                with warnings.catch_warnings():
-                                    warnings.simplefilter("ignore")
-                                    w_raw = pd.read_excel(
-                                        wagon_path,
-                                        sheet_name=0,
-                                        header=CONFIG["wagon_header_row"],
-                                        engine='calamine'
-                                    )
-                                st.success("✅ Successfully read wagon file with calamine")
-                            except Exception as e6:
-                                read_errors.append(f"Calamine: {str(e6)[:100]}")
-                                
-                                # Final error with all attempts
-                                error_msg = "Cannot read wagon file with any method.\n\nAttempted methods and errors:\n"
-                                for i, err in enumerate(read_errors, 1):
-                                    error_msg += f"{i}. {err}\n"
-                                
-                                # Provide helpful suggestions
-                                st.error("❌ All read methods failed!")
-                                st.warning(
-                                    """
-                                    **Troubleshooting suggestions:**
-                                    
-                                    1. **Check file format:**
-                                       - Open the file in Excel
-                                       - Save As → Excel Workbook (.xlsx)
-                                       - Try uploading the newly saved file
-                                    
-                                    2. **Check for corruption:**
-                                       - Open in Excel and check for errors
-                                       - Try "Open and Repair" option in Excel
-                                    
-                                    3. **Remove protection:**
-                                       - Check if file is password protected
-                                       - Remove any sheet/workbook protection
-                                    
-                                    4. **Simplify the file:**
-                                       - Remove any macros or VBA code
-                                       - Remove any embedded objects or charts
-                                       - Keep only the data sheet
-                                    
-                                    5. **Alternative format:**
-                                       - Save as CSV and modify the code to read CSV
-                                       - Save as older Excel format (.xls)
-                                    """
-                                )
-                                
-                                raise ValueError(error_msg)
-        
-        if w_raw is None or w_raw.empty:
-            raise ValueError("Wagon file is empty after reading")
-        
-        st.info(f"📊 Wagon file loaded: {len(w_raw)} rows, {len(w_raw.columns)} columns")
+                    # Show value distribution
+                    trockner_values = w_raw[trockner_col_found].astype(str).str.strip().str.upper()
+                    value_counts = trockner_values.value_counts()
+                    
+                    st.markdown("**Value distribution in Trockner column:**")
+                    for val, count in value_counts.items():
+                        st.write(f"  - '{val}': **{count:,}** rows")
+                    
+                    # Show expected counts for filter
+                    if trockner_filter and trockner_filter != "All":
+                        expected_count = (trockner_values == trockner_filter.upper()).sum()
+                        st.info(f"**Expected rows for Trockner {trockner_filter}:** {expected_count:,}")
+                else:
+                    st.error("❌ Trockner column NOT FOUND!")
+                    st.write("Looking for columns containing 'Trock'...")
+                
+                # Show first column (wagon numbers)
+                st.markdown("### 🚛 First Column (Wagon Numbers)")
+                first_col = w_raw.columns[0]
+                st.write(f"**First column name:** '{first_col}'")
+                st.write(f"**Sample values (first 20):**")
+                st.write(w_raw[first_col].head(20).tolist())
+                
+                # Show volume column (Column AA = index 26)
+                st.markdown("### 📦 Volume Column (m³)")
+                if len(w_raw.columns) > 26:
+                    vol_col = w_raw.columns[26]
+                    st.write(f"**Column at position 26 (AA):** '{vol_col}'")
+                    sample_vol = pd.to_numeric(w_raw[vol_col], errors='coerce').dropna().head(20)
+                    st.write(f"**Sample numeric values:** {sample_vol.tolist()}")
+                    st.write(f"**Mean:** {sample_vol.mean():.4f}")
         
         # Apply Trockner filter during parsing
         trockner_to_use = trockner_filter if trockner_filter != "All" else None
+        
+        # ===== MANUAL TROCKNER FILTER CHECK =====
+        with debug_container:
+            with st.expander("🔧 DEBUG: Manual Trockner Filter Check"):
+                if trockner_to_use and trockner_col_found:
+                    # Do manual count before calling parse_wagon
+                    w_raw_clean = w_raw.copy()
+                    w_raw_clean.columns = [str(c).replace("\n", " ").strip() for c in w_raw_clean.columns]
+                    
+                    # Find trockner column again in cleaned version
+                    trockner_col_clean = None
+                    for col in w_raw_clean.columns:
+                        if "Trock" in col or "trock" in col.lower():
+                            trockner_col_clean = col
+                            break
+                    
+                    if trockner_col_clean:
+                        # Clean values
+                        trockner_vals = w_raw_clean[trockner_col_clean].astype(str).str.strip().str.upper()
+                        
+                        st.write(f"**Trockner column (cleaned):** '{trockner_col_clean}'")
+                        st.write(f"**Filter value:** '{trockner_to_use.upper()}'")
+                        
+                        # Count matches
+                        exact_match = (trockner_vals == trockner_to_use.upper()).sum()
+                        st.write(f"**Rows matching '{trockner_to_use.upper()}':** {exact_match:,}")
+                        
+                        # Show sample of matching rows
+                        mask = trockner_vals == trockner_to_use.upper()
+                        sample_matching = w_raw_clean[mask].head(10)
+                        
+                        st.write("**Sample matching rows:**")
+                        display_cols = [c for c in [w_raw_clean.columns[0], trockner_col_clean, 'Produkt'] 
+                                       if c in sample_matching.columns][:5]
+                        if display_cols:
+                            st.dataframe(sample_matching[display_cols])
         
         w = parse_wagon(w_raw, trockner=trockner_to_use)
         
@@ -393,6 +369,20 @@ def run_analysis(energy_path: str, wagon_path: str, products_filter, month_filte
 
         # Store filter info
         applied_trockner = trockner_to_use or "All"
+        
+        # ===== SHOW POST-PARSE DEBUG INFO =====
+        with debug_container:
+            with st.expander("🔧 DEBUG: After parse_wagon()"):
+                st.write(f"**Rows returned by parse_wagon:** {len(w):,}")
+                st.write(f"**Trockner filter applied:** {applied_trockner}")
+                
+                if "Trockner" in w.columns:
+                    st.write(f"**Trockner values in result:**")
+                    st.write(w["Trockner"].value_counts())
+                
+                st.write(f"**Volume sum:** {w['m3'].sum():,.2f} m³")
+                st.write(f"**Products in result:**")
+                st.write(w["Produkt"].value_counts())
         
         # ===== APPLY PRODUCT FILTER =====
         status.text("🔄 Applying product filters...")
@@ -406,6 +396,13 @@ def run_analysis(energy_path: str, wagon_path: str, products_filter, month_filte
                 raise ValueError(f"No wagon records found for selected products: {products_filter}")
         
         wagon_count_after_product_filter = len(w)
+        
+        # ===== DEBUG: After product filter =====
+        with debug_container:
+            with st.expander("🔧 DEBUG: After Product Filter"):
+                st.write(f"**Before product filter:** {wagon_count_before_product_filter:,}")
+                st.write(f"**After product filter:** {wagon_count_after_product_filter:,}")
+                st.write(f"**Product filter:** {products_filter}")
         
         # Key metrics from wagon data
         total_wagons = len(w)
@@ -532,6 +529,7 @@ def run_analysis(energy_path: str, wagon_path: str, products_filter, month_filte
             "applied_trockner": applied_trockner,
             "wagon_count_before_product_filter": wagon_count_before_product_filter,
             "wagon_count_after_product_filter": wagon_count_after_product_filter,
+            "raw_wagon_file_rows": len(w_raw),  # Add this for debugging
         }
 
     finally:
@@ -2059,4 +2057,5 @@ Verification:
         st.error(f"❌ Display error: {e}")
         with st.expander("🔍 View Error Details"):
             st.exception(e)
+
 
