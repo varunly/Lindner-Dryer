@@ -704,7 +704,200 @@ def parse_wagon(df: pd.DataFrame, trockner: str = None) -> pd.DataFrame:
     logger.info("="*70)
     
     return df
-
+def diagnose_wagon_file(df: pd.DataFrame, trockner: str = None) -> dict:
+    """
+    Diagnostic function to trace exactly where rows are lost.
+    Call this BEFORE parse_wagon to see the raw data.
+    """
+    print("="*70)
+    print("DIAGNOSTIC: WAGON FILE ANALYSIS")
+    print("="*70)
+    
+    result = {
+        "raw_rows": len(df),
+        "steps": []
+    }
+    
+    # Step 0: Raw data
+    print(f"\n[STEP 0] Raw file: {len(df):,} rows, {len(df.columns)} columns")
+    result["steps"].append(("Raw file", len(df)))
+    
+    # Show first 15 columns with their indices
+    print("\nColumn names (first 15):")
+    for i, col in enumerate(df.columns[:15]):
+        print(f"  [{i:2d}] {repr(col)}")
+    
+    # Make a copy and clean column names
+    df_clean = df.copy()
+    df_clean.columns = [str(c).replace("\n", "").replace("\r", "").strip() for c in df_clean.columns]
+    
+    print("\nCleaned column names (first 15):")
+    for i, col in enumerate(df_clean.columns[:15]):
+        print(f"  [{i:2d}] '{col}'")
+    
+    # Find key columns
+    print("\n" + "-"*50)
+    print("FINDING KEY COLUMNS")
+    print("-"*50)
+    
+    # Trockner column
+    trockner_col = None
+    for col in df_clean.columns:
+        if "trock" in col.lower():
+            trockner_col = col
+            break
+    
+    if trockner_col:
+        print(f"✓ Trockner column: '{trockner_col}'")
+        trockner_vals = df_clean[trockner_col].astype(str).str.strip().str.upper()
+        print(f"  Values: {trockner_vals.value_counts().to_dict()}")
+        
+        if trockner:
+            match_count = (trockner_vals == trockner.upper()).sum()
+            print(f"  Rows matching '{trockner.upper()}': {match_count:,}")
+            result["trockner_match"] = match_count
+    else:
+        print("✗ Trockner column NOT FOUND")
+    
+    # EM column (thickness)
+    em_col = None
+    for col in df_clean.columns:
+        if col.upper() == "EM":
+            em_col = col
+            break
+    
+    if em_col:
+        print(f"\n✓ EM (thickness) column: '{em_col}'")
+        em_vals = df_clean[em_col].astype(str).str.strip()
+        print(f"  Sample values: {em_vals.head(10).tolist()}")
+        print(f"  Unique values: {sorted(em_vals.unique())[:15]}")
+    else:
+        print("\n✗ EM column NOT FOUND")
+    
+    # Rez. column (product type)
+    rez_col = None
+    for col in df_clean.columns:
+        if "rez" in col.lower():
+            rez_col = col
+            break
+    
+    if rez_col:
+        print(f"\n✓ Rez. (type) column: '{rez_col}'")
+        rez_vals = df_clean[rez_col].astype(str).str.strip().str.upper()
+        rez_vals_clean = rez_vals.replace(["", "NAN", "NONE"], pd.NA)
+        non_empty = rez_vals_clean.dropna()
+        print(f"  Non-empty values: {len(non_empty):,} rows")
+        print(f"  Unique non-empty: {non_empty.unique().tolist()}")
+    else:
+        print("\n✗ Rez. column NOT FOUND")
+    
+    # Volume column
+    volume_col = None
+    for col in df_clean.columns:
+        if "m³" in col or "m3" in col.lower():
+            volume_col = col
+            break
+    if not volume_col and len(df_clean.columns) > 26:
+        volume_col = df_clean.columns[26]
+    
+    if volume_col:
+        print(f"\n✓ Volume column: '{volume_col}'")
+        vol_numeric = pd.to_numeric(df_clean[volume_col], errors='coerce')
+        print(f"  Valid numeric: {vol_numeric.notna().sum():,}")
+        print(f"  Positive (>0): {(vol_numeric > 0).sum():,}")
+        print(f"  Zero or negative: {(vol_numeric <= 0).sum():,}")
+        print(f"  NaN/invalid: {vol_numeric.isna().sum():,}")
+        result["volume_positive"] = (vol_numeric > 0).sum()
+    else:
+        print("\n✗ Volume column NOT FOUND")
+    
+    # Timestamp column
+    print("\n" + "-"*50)
+    print("TIMESTAMP ANALYSIS")
+    print("-"*50)
+    
+    timestamp_col = None
+    for col in df_clean.columns:
+        col_lower = col.lower()
+        if "pressdat" in col_lower or "datum" in col_lower:
+            timestamp_col = col
+            break
+    
+    if timestamp_col:
+        print(f"✓ Timestamp column: '{timestamp_col}'")
+        ts = pd.to_datetime(df_clean[timestamp_col], errors='coerce')
+        print(f"  Valid timestamps: {ts.notna().sum():,}")
+        print(f"  Invalid (NaT): {ts.isna().sum():,}")
+        result["valid_timestamps"] = ts.notna().sum()
+    else:
+        print("✗ Timestamp column NOT FOUND")
+    
+    # Simulate filtering steps
+    print("\n" + "-"*50)
+    print("SIMULATED FILTER PIPELINE")
+    print("-"*50)
+    
+    df_sim = df_clean.copy()
+    print(f"\n[START] {len(df_sim):,} rows")
+    
+    # Step 1: Trockner filter
+    if trockner and trockner_col:
+        trockner_vals = df_sim[trockner_col].astype(str).str.strip().str.upper()
+        df_sim = df_sim[trockner_vals == trockner.upper()]
+        print(f"[AFTER Trockner '{trockner}'] {len(df_sim):,} rows")
+        result["steps"].append((f"After Trockner {trockner}", len(df_sim)))
+    
+    # Step 2: Volume filter
+    if volume_col and volume_col in df_sim.columns:
+        vol = pd.to_numeric(df_sim[volume_col], errors='coerce')
+        before = len(df_sim)
+        df_sim = df_sim[vol > 0]
+        print(f"[AFTER Volume > 0] {len(df_sim):,} rows (removed {before - len(df_sim):,})")
+        result["steps"].append(("After Volume > 0", len(df_sim)))
+    
+    # Step 3: Create product code
+    if em_col and em_col in df_sim.columns:
+        thickness = pd.to_numeric(df_sim[em_col], errors='coerce')
+        
+        # Get product type with forward-fill
+        if rez_col and rez_col in df_sim.columns:
+            ptype = df_sim[rez_col].astype(str).str.strip().str.upper()
+            ptype = ptype.replace(["", "NAN", "NONE", "NA"], pd.NA)
+            ptype = ptype.ffill().fillna("L")
+        else:
+            ptype = "L"
+        
+        # Create product code
+        df_sim["_product"] = ptype.astype(str) + thickness.astype(str).str.replace(".0", "", regex=False)
+        
+        print(f"\nProduct codes created:")
+        prod_counts = df_sim["_product"].value_counts()
+        for p, c in prod_counts.head(15).items():
+            valid = "✓" if p in PRODUCT_SPECIFICATIONS else "✗"
+            print(f"  {valid} {p}: {c:,}")
+        
+        # Filter to valid products
+        valid = df_sim["_product"].isin(PRODUCT_SPECIFICATIONS.keys())
+        before = len(df_sim)
+        df_sim = df_sim[valid]
+        print(f"\n[AFTER Valid Products] {len(df_sim):,} rows (removed {before - len(df_sim):,})")
+        result["steps"].append(("After Valid Products", len(df_sim)))
+    
+    # Step 4: Timestamp filter
+    if timestamp_col and timestamp_col in df_sim.columns:
+        ts = pd.to_datetime(df_sim[timestamp_col], errors='coerce')
+        before = len(df_sim)
+        df_sim = df_sim[ts.notna()]
+        print(f"[AFTER Valid Timestamp] {len(df_sim):,} rows (removed {before - len(df_sim):,})")
+        result["steps"].append(("After Valid Timestamp", len(df_sim)))
+    
+    print("\n" + "="*70)
+    print(f"FINAL EXPECTED COUNT: {len(df_sim):,} rows")
+    print("="*70)
+    
+    result["final_expected"] = len(df_sim)
+    
+    return result
 
 def build_intervals(row: pd.Series) -> List[Tuple[str, pd.Timestamp, pd.Timestamp]]:
     """Build zone intervals for a single wagon row."""
@@ -1030,4 +1223,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
