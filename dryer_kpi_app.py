@@ -220,12 +220,7 @@ def validate_excel_file(file_path: str, file_description: str) -> bool:
 
 def run_analysis(energy_path: str, wagon_path: str, products_filter, month_filter, trockner_filter) -> dict:
     """
-    Run the complete KPI analysis.
-    
-    Wagon counting method:
-    - Count ALL rows with valid wagon numbers (not unique)
-    - One wagon can be used multiple times = multiple rows
-    - Volume is read directly from the m³ column (AA)
+    Run the complete KPI analysis with improved file reading.
     """
     progress = st.progress(0)
     status = st.empty()
@@ -235,27 +230,158 @@ def run_analysis(energy_path: str, wagon_path: str, products_filter, month_filte
         status.text("🔄 Parsing energy data...")
         progress.progress(15)
         
+        # Try different methods to read energy file
         try:
             e_raw = pd.read_excel(energy_path, sheet_name=CONFIG["energy_sheet"])
-        except Exception as e:
-            raise ValueError(f"Cannot read energy file: {e}")
+        except Exception as e1:
+            st.warning(f"⚠️ First attempt failed: {e1}")
+            st.info("🔄 Trying alternative method...")
+            try:
+                # Try with openpyxl engine explicitly
+                e_raw = pd.read_excel(energy_path, sheet_name=CONFIG["energy_sheet"], engine='openpyxl')
+            except Exception as e2:
+                st.warning(f"⚠️ Second attempt failed: {e2}")
+                st.info("🔄 Trying xlrd engine...")
+                try:
+                    # Try with xlrd for older formats
+                    e_raw = pd.read_excel(energy_path, sheet_name=CONFIG["energy_sheet"], engine='xlrd')
+                except Exception as e3:
+                    raise ValueError(f"Cannot read energy file with any method. Last error: {e3}")
         
         e = parse_energy(e_raw)
         if e.empty:
             raise ValueError("Parsed energy data is empty.")
 
-        # ===== PARSE WAGON DATA =====
+        # ===== PARSE WAGON DATA WITH MULTIPLE METHODS =====
         status.text("🔄 Parsing wagon tracking data...")
         progress.progress(35)
         
+        w_raw = None
+        read_errors = []
+        
+        # Method 1: Standard pandas read_excel
         try:
+            st.info("📖 Attempting standard Excel read...")
             w_raw = pd.read_excel(
                 wagon_path,
                 sheet_name=CONFIG["wagon_sheet"],
                 header=CONFIG["wagon_header_row"],
             )
-        except Exception as e:
-            raise ValueError(f"Cannot read wagon file: {e}")
+            st.success("✅ Successfully read wagon file with standard method")
+        except Exception as e1:
+            read_errors.append(f"Standard read: {str(e1)[:100]}")
+            
+            # Method 2: Try with openpyxl engine (good for .xlsx/.xlsm)
+            try:
+                st.info("📖 Attempting with openpyxl engine...")
+                w_raw = pd.read_excel(
+                    wagon_path,
+                    sheet_name=CONFIG["wagon_sheet"],
+                    header=CONFIG["wagon_header_row"],
+                    engine='openpyxl'
+                )
+                st.success("✅ Successfully read wagon file with openpyxl")
+            except Exception as e2:
+                read_errors.append(f"Openpyxl: {str(e2)[:100]}")
+                
+                # Method 3: Try reading without specifying sheet name
+                try:
+                    st.info("📖 Attempting to read first sheet...")
+                    w_raw = pd.read_excel(
+                        wagon_path,
+                        sheet_name=0,  # First sheet
+                        header=CONFIG["wagon_header_row"],
+                    )
+                    st.success("✅ Successfully read wagon file from first sheet")
+                except Exception as e3:
+                    read_errors.append(f"First sheet: {str(e3)[:100]}")
+                    
+                    # Method 4: Try with xlrd for older formats
+                    try:
+                        st.info("📖 Attempting with xlrd engine (for .xls files)...")
+                        w_raw = pd.read_excel(
+                            wagon_path,
+                            sheet_name=CONFIG["wagon_sheet"],
+                            header=CONFIG["wagon_header_row"],
+                            engine='xlrd'
+                        )
+                        st.success("✅ Successfully read wagon file with xlrd")
+                    except Exception as e4:
+                        read_errors.append(f"xlrd: {str(e4)[:100]}")
+                        
+                        # Method 5: Try reading with no header specification
+                        try:
+                            st.info("📖 Attempting without header row specification...")
+                            w_raw = pd.read_excel(
+                                wagon_path,
+                                sheet_name=0,
+                            )
+                            # Skip to the correct row manually
+                            if CONFIG["wagon_header_row"] > 0:
+                                w_raw = w_raw.iloc[CONFIG["wagon_header_row"]:].reset_index(drop=True)
+                                w_raw.columns = w_raw.iloc[0]
+                                w_raw = w_raw[1:].reset_index(drop=True)
+                            st.success("✅ Successfully read wagon file with manual header processing")
+                        except Exception as e5:
+                            read_errors.append(f"No header: {str(e5)[:100]}")
+                            
+                            # Method 6: Try with calamine engine (fast reader)
+                            try:
+                                st.info("📖 Attempting with calamine engine...")
+                                import warnings
+                                with warnings.catch_warnings():
+                                    warnings.simplefilter("ignore")
+                                    w_raw = pd.read_excel(
+                                        wagon_path,
+                                        sheet_name=0,
+                                        header=CONFIG["wagon_header_row"],
+                                        engine='calamine'
+                                    )
+                                st.success("✅ Successfully read wagon file with calamine")
+                            except Exception as e6:
+                                read_errors.append(f"Calamine: {str(e6)[:100]}")
+                                
+                                # Final error with all attempts
+                                error_msg = "Cannot read wagon file with any method.\n\nAttempted methods and errors:\n"
+                                for i, err in enumerate(read_errors, 1):
+                                    error_msg += f"{i}. {err}\n"
+                                
+                                # Provide helpful suggestions
+                                st.error("❌ All read methods failed!")
+                                st.warning(
+                                    """
+                                    **Troubleshooting suggestions:**
+                                    
+                                    1. **Check file format:**
+                                       - Open the file in Excel
+                                       - Save As → Excel Workbook (.xlsx)
+                                       - Try uploading the newly saved file
+                                    
+                                    2. **Check for corruption:**
+                                       - Open in Excel and check for errors
+                                       - Try "Open and Repair" option in Excel
+                                    
+                                    3. **Remove protection:**
+                                       - Check if file is password protected
+                                       - Remove any sheet/workbook protection
+                                    
+                                    4. **Simplify the file:**
+                                       - Remove any macros or VBA code
+                                       - Remove any embedded objects or charts
+                                       - Keep only the data sheet
+                                    
+                                    5. **Alternative format:**
+                                       - Save as CSV and modify the code to read CSV
+                                       - Save as older Excel format (.xls)
+                                    """
+                                )
+                                
+                                raise ValueError(error_msg)
+        
+        if w_raw is None or w_raw.empty:
+            raise ValueError("Wagon file is empty after reading")
+        
+        st.info(f"📊 Wagon file loaded: {len(w_raw)} rows, {len(w_raw.columns)} columns")
         
         # Apply Trockner filter during parsing
         trockner_to_use = trockner_filter if trockner_filter != "All" else None
@@ -281,8 +407,8 @@ def run_analysis(energy_path: str, wagon_path: str, products_filter, month_filte
         
         wagon_count_after_product_filter = len(w)
         
-        # Key metrics from wagon data (ALL ROWS, not unique)
-        total_wagons = len(w)  # Count all rows
+        # Key metrics from wagon data
+        total_wagons = len(w)
         total_volume = w["m3"].sum()
         
         status.text(f"📊 Found {total_wagons:,} wagon rows with {total_volume:,.2f} m³ total volume")
@@ -1933,3 +2059,4 @@ Verification:
         st.error(f"❌ Display error: {e}")
         with st.expander("🔍 View Error Details"):
             st.exception(e)
+
