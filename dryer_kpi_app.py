@@ -1504,7 +1504,7 @@ Verification:
             
             with col_filter2:
                 select_all = st.button("Select All", key="select_all_trends")
-                clear_all = st.button("Clear All", key="clear
+                clear_all = st.button("Clear All", key="clear)
                            
             if select_all:
                 selected_products_trends = available_products
@@ -2325,4 +2325,5 @@ Verification:
         st.error(f"❌ Display error: {e}")
         with st.expander("🔍 View Error Details"):
             st.exception(e)
+
 
