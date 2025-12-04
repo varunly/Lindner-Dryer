@@ -1,10 +1,9 @@
 # dryer_kpi_monthly_final.py
 """
 Lindner Dryer KPI Calculation Module
-UPDATED: 
-- Wagon count = rows with valid wagon number in Column A (WG-Nr)
-- Volume read directly from m³ column (Column AA)
-- Trockner filter applied correctly
+FIXED: 
+- Correct wagon counting for Trockner A/B filtering
+- Energy allocated only to selected Trockner's wagons
 """
 
 import pandas as pd
@@ -291,10 +290,6 @@ def parse_energy(df: pd.DataFrame) -> pd.DataFrame:
         total_electrical = 0
         logger.warning("  Electrical column not found")
 
-    if total_electrical > 0 and total_thermal > 0:
-        ratio = total_thermal / total_electrical
-        logger.info(f"  ✓ Raw data ratio: Thermal/Electrical = {ratio:.1f}x")
-    
     df["E_start"] = df["Zeitstempel"]
     df["E_end"] = df["Zeitstempel"] + pd.Timedelta(hours=1)
 
@@ -304,24 +299,85 @@ def parse_energy(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def find_wagon_number_column(df: pd.DataFrame) -> Optional[str]:
+def find_trockner_column(df: pd.DataFrame) -> Optional[str]:
     """
-    Find the wagon number column (Column A).
-    This is the primary column for counting wagons.
+    Find the Trockner column in the dataframe.
+    Searches for various column name patterns.
     """
+    logger.info("  Searching for Trockner column...")
+    
+    # Log all columns for debugging
+    logger.info(f"  Available columns: {list(df.columns)}")
+    
+    # Try exact match first
+    if TROCKNER_COLUMN in df.columns:
+        logger.info(f"  → Found exact match: '{TROCKNER_COLUMN}'")
+        return TROCKNER_COLUMN
+    
+    # Try various patterns
+    patterns = ["Trock-", "Trock", "Trockner", "trock", "TROCK"]
+    
+    for col in df.columns:
+        col_str = str(col).strip()
+        for pattern in patterns:
+            if pattern.lower() in col_str.lower():
+                logger.info(f"  → Found Trockner column: '{col}' (matched pattern '{pattern}')")
+                return col
+    
+    # Log warning if not found
+    logger.warning("  → Trockner column NOT FOUND!")
+    logger.warning(f"  → Searched for patterns: {patterns}")
+    logger.warning(f"  → In columns: {list(df.columns)[:20]}...")
+    
+    return None
+
+
+def find_volume_column(df: pd.DataFrame) -> Optional[str]:
+    """Find the volume column (m³) in the dataframe."""
+    logger.info("  Searching for volume column...")
+    
+    # Try exact matches
+    exact_matches = ["m³", "m3", "m\u00b3", "Volumen", "Volume"]
+    for pattern in exact_matches:
+        if pattern in df.columns:
+            logger.info(f"  → Found volume column (exact): '{pattern}'")
+            return pattern
+    
+    # Try partial matches
+    for col in df.columns:
+        col_str = str(col).strip().lower()
+        if "m³" in col_str or "m3" in col_str or "³" in col_str or "volum" in col_str:
+            logger.info(f"  → Found volume column (partial): '{col}'")
+            return col
+    
+    # Try by position (Column AA = index 26)
+    if len(df.columns) > 26:
+        col_aa = df.columns[26]
+        sample = pd.to_numeric(df[col_aa], errors='coerce').dropna()
+        if len(sample) > 0:
+            avg = sample.mean()
+            if 0.1 < avg < 20:  # Reasonable volume range
+                logger.info(f"  → Using column at position 26 (AA): '{col_aa}' (avg={avg:.3f})")
+                return col_aa
+    
+    logger.warning("  → Volume column NOT FOUND!")
+    return None
+
+
+def find_wagon_column(df: pd.DataFrame) -> Optional[str]:
+    """Find the wagon number column (Column A)."""
     logger.info("  Searching for wagon number column...")
     
-    # First column is typically Column A
+    # First column is usually Column A
     first_col = df.columns[0]
     first_col_str = str(first_col).strip()
     
-    logger.info(f"  → First column (A): '{first_col}'")
+    logger.info(f"  → First column: '{first_col}'")
     
-    # Common patterns for wagon number column
-    wagon_patterns = ["WG-", "WG_", "WG Nr", "Wagen", "Wagon", "HW-", "Nr"]
+    # Check patterns
+    patterns = ["WG-", "WG_", "WG Nr", "Wagen", "Wagon", "HW-", "Nr"]
     
-    # Check first column
-    for pattern in wagon_patterns:
+    for pattern in patterns:
         if pattern.lower() in first_col_str.lower():
             logger.info(f"  → Using first column as wagon number: '{first_col}'")
             return first_col
@@ -329,143 +385,69 @@ def find_wagon_number_column(df: pd.DataFrame) -> Optional[str]:
     # Search all columns
     for col in df.columns:
         col_str = str(col).strip()
-        for pattern in wagon_patterns:
+        for pattern in patterns:
             if pattern.lower() in col_str.lower():
                 logger.info(f"  → Found wagon column: '{col}'")
                 return col
     
     # Default to first column
-    logger.warning(f"  → No wagon pattern found, using first column: '{first_col}'")
+    logger.warning(f"  → No pattern match, defaulting to first column: '{first_col}'")
     return first_col
 
 
-def is_valid_wagon_number(value) -> bool:
+def is_valid_wagon_row(row, wagon_col) -> bool:
     """
-    Check if a value is a valid wagon number.
+    Check if a row is a valid wagon row.
+    A valid row has a wagon number that is numeric or follows WG-xxx pattern.
+    """
+    value = row[wagon_col]
     
-    A valid wagon number:
-    - Is not empty/NaN
-    - Is numeric OR starts with WG-/HW- prefix
-    - Is not a header or summary row
-    """
     if pd.isna(value):
         return False
     
     val_str = str(value).strip()
     
-    # Empty
+    # Empty or whitespace
     if not val_str:
         return False
     
-    # Exclude common non-wagon values
-    exclude_values = [
-        "nan", "none", "null", "-", "--", "---", "",
-        "summe", "total", "gesamt", "sum",
-        "wg-nr", "wg_nr", "wg nr", "wagon", "wagen", "hordenwagen",
-        "produkt", "product", "datum", "date", "zeit", "time",
-        "monat", "month", "jahr", "year",
-    ]
+    # Exclude known non-wagon values
+    exclude_lower = ["nan", "none", "null", "-", "--", "summe", "total", "gesamt",
+                     "wg-nr", "wg_nr", "produkt", "datum", "monat", ""]
     
-    val_lower = val_str.lower()
-    if val_lower in exclude_values:
+    if val_str.lower() in exclude_lower:
         return False
     
-    # Check for header-like text
-    if any(val_lower.startswith(excl) for excl in ["wg-nr", "wg_nr", "produkt", "datum"]):
-        return False
-    
-    # Valid patterns:
-    
-    # 1. Pure numeric (e.g., 1234, 5678)
+    # Check if looks like a wagon number
+    # 1. Pure numeric
     if val_str.isdigit():
         num = int(val_str)
-        if 1 <= num <= 99999:  # Reasonable wagon number range
-            return True
+        return 1 <= num <= 99999
     
-    # 2. Float that's actually an integer (e.g., "1234.0" from Excel)
+    # 2. Float that's an integer (e.g., "1234.0")
     try:
-        num_val = float(val_str)
-        if num_val > 0 and num_val == int(num_val) and num_val < 100000:
+        num = float(val_str)
+        if num > 0 and num == int(num) and num < 100000:
             return True
-    except (ValueError, TypeError):
+    except:
         pass
     
-    # 3. Prefixed wagon number (e.g., "WG-1234", "HW-5678")
+    # 3. WG-xxx pattern
     import re
-    if re.match(r'^(WG|HW|A|B)?[-_]?\d{3,6}$', val_str, re.IGNORECASE):
+    if re.match(r'^(WG|HW)?[-_]?\d{3,6}$', val_str, re.IGNORECASE):
         return True
     
     return False
 
 
-def find_volume_column(df: pd.DataFrame) -> Optional[str]:
-    """Find the volume column (m³) in the dataframe."""
-    logger.info("  Searching for volume column...")
-    
-    volume_patterns = ["m³", "m3", "m\u00b3", "m^3", "Volumen", "Volume", "vol"]
-    
-    # Exact matches
-    for pattern in volume_patterns:
-        if pattern in df.columns:
-            logger.info(f"  → Found volume column (exact): '{pattern}'")
-            return pattern
-    
-    # Partial matches
-    for col in df.columns:
-        col_str = str(col).strip()
-        col_lower = col_str.lower()
-        
-        if any([
-            "m³" in col_str, "m3" in col_lower, "³" in col_str,
-            "\u00b3" in col_str, col_lower.startswith("m³"), col_lower.startswith("m3"),
-        ]):
-            logger.info(f"  → Found volume column (pattern): '{col}'")
-            return col
-    
-    # Check column position 26 (Column AA)
-    try:
-        if len(df.columns) > 26:
-            col_aa = df.columns[26]
-            sample = pd.to_numeric(df[col_aa], errors='coerce').dropna()
-            if len(sample) > 0 and 0.5 < sample.mean() < 10:
-                logger.info(f"  → Using column 26 (AA) as volume: '{col_aa}'")
-                return col_aa
-    except Exception as e:
-        logger.warning(f"  → Error checking column 26: {e}")
-    
-    # Log all columns for debugging
-    logger.warning("  Volume column not found! All columns:")
-    for i, col in enumerate(df.columns[:30]):
-        logger.info(f"    [{i:2d}] '{col}'")
-    
-    return None
-
-
-def find_trockner_column(df: pd.DataFrame) -> Optional[str]:
-    """Find the Trockner column in the dataframe."""
-    if TROCKNER_COLUMN in df.columns:
-        return TROCKNER_COLUMN
-    
-    for col in df.columns:
-        col_clean = str(col).strip()
-        if "Trock" in col_clean or "trock" in col_clean.lower():
-            logger.info(f"  → Found Trockner column: '{col}'")
-            return col
-    
-    return None
-
-
 def parse_wagon(df: pd.DataFrame, trockner: str = None) -> pd.DataFrame:
     """
-    Parse wagon data.
+    Parse wagon data with CORRECT Trockner filtering.
     
-    WAGON COUNTING METHOD:
-    1. Find Column A (wagon number column)
-    2. Count rows where Column A has a valid wagon number
-    3. If Trockner is specified, only count wagons for that Trockner
-    
-    Each row with a valid wagon number = 1 wagon
-    Volume is read directly from the m³ column
+    IMPORTANT: 
+    - Count = ALL rows with valid wagon number in Column A
+    - When trockner='A', only count rows where Trock- column = 'A'
+    - Volume comes from m³ column (AA)
     """
     logger.info("="*70)
     logger.info("PARSING WAGON DATA")
@@ -479,135 +461,142 @@ def parse_wagon(df: pd.DataFrame, trockner: str = None) -> pd.DataFrame:
     # Clean column names
     df.columns = [str(c).replace("\n", " ").strip() for c in df.columns]
     
-    # Log columns
+    # Log all columns
     logger.info(f"Columns ({len(df.columns)}):")
-    for i, col in enumerate(df.columns[:30]):
+    for i, col in enumerate(df.columns[:35]):
         logger.info(f"  [{i:2d}] '{col}'")
     
     # ========================================
-    # STEP 1: FIND WAGON NUMBER COLUMN (Column A)
+    # STEP 1: FIND KEY COLUMNS
     # ========================================
-    wagon_col = find_wagon_number_column(df)
+    wagon_col = find_wagon_column(df)
+    trockner_col = find_trockner_column(df)
+    volume_col = find_volume_column(df)
     
     if not wagon_col:
-        raise ValueError("Cannot find wagon number column (Column A)")
-    
-    # Show sample values
-    sample_values = df[wagon_col].head(15).tolist()
-    logger.info(f"  Sample values in '{wagon_col}': {sample_values}")
+        raise ValueError("Cannot find wagon number column!")
     
     # ========================================
-    # STEP 2: FILTER TO VALID WAGON ROWS ONLY
+    # STEP 2: FILTER VALID WAGON ROWS
     # ========================================
     logger.info("Filtering valid wagon rows...")
     
-    # Apply validation to each row
-    valid_mask = df[wagon_col].apply(is_valid_wagon_number)
+    # Show sample values from wagon column
+    sample_wagon = df[wagon_col].head(20).tolist()
+    logger.info(f"  Sample wagon values: {sample_wagon}")
+    
+    # Count valid wagon rows
+    valid_mask = df.apply(lambda row: is_valid_wagon_row(row, wagon_col), axis=1)
     
     valid_count = valid_mask.sum()
     invalid_count = (~valid_mask).sum()
     
-    logger.info(f"  → Valid wagon rows: {valid_count}")
-    logger.info(f"  → Invalid/header rows: {invalid_count}")
+    logger.info(f"  Valid wagon rows: {valid_count}")
+    logger.info(f"  Invalid rows: {invalid_count}")
     
-    # Show some invalid values for debugging
-    if invalid_count > 0:
-        invalid_samples = df.loc[~valid_mask, wagon_col].head(10).tolist()
-        logger.info(f"  → Sample invalid values: {invalid_samples}")
-    
-    # Keep only valid wagon rows
+    # Filter
     df = df[valid_mask].copy()
-    
-    logger.info(f"After wagon filter: {len(df)} valid wagons")
+    logger.info(f"After valid wagon filter: {len(df)} rows")
     
     if df.empty:
-        raise ValueError("No valid wagon rows found in Column A")
+        raise ValueError("No valid wagon rows found!")
     
-    # Rename to standard name
+    # Rename wagon column
     if wagon_col != "WG_Nr":
         df = df.rename(columns={wagon_col: "WG_Nr"})
     
     # ========================================
-    # STEP 3: FILTER BY TROCKNER (if specified)
+    # STEP 3: FILTER BY TROCKNER (CRITICAL!)
     # ========================================
-    if trockner:
-        trockner_col = find_trockner_column(df)
+    if trockner and trockner_col:
+        logger.info(f"\n{'='*50}")
+        logger.info(f"FILTERING FOR TROCKNER {trockner}")
+        logger.info(f"{'='*50}")
         
-        if trockner_col:
-            logger.info(f"Filtering for Trockner {trockner}...")
-            
-            # Show distribution before filter
-            trockner_values = df[trockner_col].astype(str).str.strip().str.upper()
-            value_counts = trockner_values.value_counts()
-            logger.info(f"  → Trockner distribution:")
-            for val, count in value_counts.items():
-                logger.info(f"      {val}: {count} wagons")
-            
-            # Apply filter
-            before_filter = len(df)
-            mask = trockner_values == trockner.upper().strip()
-            df = df[mask].copy()
-            after_filter = len(df)
-            
-            logger.info(f"  → Filtered: {before_filter} → {after_filter} wagons (Trockner {trockner})")
-            
-            if df.empty:
-                available = list(value_counts.index)
-                raise ValueError(f"No wagons found for Trockner {trockner}. Available: {available}")
-        else:
-            logger.warning(f"  → Trockner column not found, skipping filter")
+        # Clean the Trockner column values
+        df["_trockner_clean"] = df[trockner_col].astype(str).str.strip().str.upper()
+        
+        # Show unique values BEFORE filter
+        unique_values = df["_trockner_clean"].value_counts()
+        logger.info(f"Trockner distribution BEFORE filter:")
+        for val, count in unique_values.items():
+            logger.info(f"  '{val}': {count} rows")
+        
+        # Count before filter
+        count_before = len(df)
+        
+        # Apply filter - match the selected Trockner
+        trockner_upper = trockner.upper().strip()
+        mask = df["_trockner_clean"] == trockner_upper
+        
+        df = df[mask].copy()
+        count_after = len(df)
+        
+        logger.info(f"\nFiltered: {count_before} → {count_after} rows (Trockner {trockner})")
+        logger.info(f"Removed: {count_before - count_after} rows (other Trockner)")
+        
+        # Drop temp column
+        df = df.drop(columns=["_trockner_clean"], errors="ignore")
+        
+        if df.empty:
+            available = list(unique_values.index)
+            raise ValueError(
+                f"No rows found for Trockner '{trockner}'. "
+                f"Available values: {available}"
+            )
+    elif trockner and not trockner_col:
+        logger.warning(f"⚠️ Trockner filter requested ({trockner}) but column not found!")
+        logger.warning("⚠️ Proceeding without Trockner filter")
     
     # ========================================
     # STEP 4: GET VOLUME FROM m³ COLUMN
     # ========================================
-    volume_col = find_volume_column(df)
-    
     if volume_col:
-        logger.info(f"Reading volume from column: '{volume_col}'")
+        logger.info(f"\nReading volume from column: '{volume_col}'")
         
-        # Show sample raw values
+        # Sample values
         sample_vol = df[volume_col].head(10).tolist()
-        logger.info(f"  → Sample raw values: {sample_vol}")
+        logger.info(f"  Sample volume values: {sample_vol}")
         
         # Convert to numeric
         df["m3"] = pd.to_numeric(df[volume_col], errors='coerce')
         
-        # Statistics
+        # Stats
         valid_vol = df["m3"].notna().sum()
         invalid_vol = df["m3"].isna().sum()
         
-        logger.info(f"  → Valid volumes: {valid_vol}")
-        logger.info(f"  → Invalid volumes: {invalid_vol}")
+        logger.info(f"  Valid volumes: {valid_vol}")
+        logger.info(f"  Invalid volumes: {invalid_vol}")
         
-        # Fill NaN with 0 (will be filtered out)
+        # Fill NaN
         df["m3"] = df["m3"].fillna(0)
         
-        # Filter out zero/negative volumes
-        before_vol_filter = len(df)
+        # Filter zero/negative
+        before_vol = len(df)
         df = df[df["m3"] > 0].copy()
-        after_vol_filter = len(df)
+        after_vol = len(df)
         
-        if before_vol_filter != after_vol_filter:
-            logger.info(f"  → Removed {before_vol_filter - after_vol_filter} rows with volume ≤ 0")
+        if before_vol != after_vol:
+            logger.info(f"  Removed {before_vol - after_vol} rows with volume ≤ 0")
         
-        logger.info(f"  → Final wagon count: {len(df)}")
-        logger.info(f"  → Volume range: {df['m3'].min():.4f} - {df['m3'].max():.4f} m³")
-        logger.info(f"  → Total volume: {df['m3'].sum():.2f} m³")
-        logger.info(f"  → Avg volume/wagon: {df['m3'].mean():.4f} m³")
+        logger.info(f"  Final rows: {len(df)}")
+        logger.info(f"  Volume range: {df['m3'].min():.4f} - {df['m3'].max():.4f} m³")
+        logger.info(f"  Total volume: {df['m3'].sum():.2f} m³")
+        logger.info(f"  Average volume: {df['m3'].mean():.4f} m³")
     else:
-        logger.error("Volume column not found! Using fallback calculation...")
-        df = calculate_fallback_volume(df)
+        logger.error("Volume column not found! Using fallback.")
+        df["m3"] = 3.5  # Default
     
     # ========================================
-    # STEP 5: PARSE OTHER FIELDS
+    # STEP 5: PARSE OTHER COLUMNS
     # ========================================
     
     # Timestamps
     if "Pressdat. + Zeit" in df.columns:
         df["t0"] = pd.to_datetime(df["Pressdat. + Zeit"], errors="coerce")
     else:
-        date = df.get("Pressen-Datum", pd.Series()).astype(str)
-        time = df.get("Press-Zeit", pd.Series()).astype(str)
+        date = df.get("Pressen-Datum", pd.Series(dtype=str)).astype(str)
+        time = df.get("Press-Zeit", pd.Series(dtype=str)).astype(str)
         df["t0"] = pd.to_datetime(date + " " + time, errors="coerce")
     
     # Product
@@ -619,7 +608,10 @@ def parse_wagon(df: pd.DataFrame, trockner: str = None) -> pd.DataFrame:
     # Zone entry times
     for z in ("Z2", "Z3", "Z4", "Z5"):
         col = f"In {z}"
-        df[f"{z}_in"] = pd.to_datetime(df[col], errors="coerce", dayfirst=True) if col in df.columns else pd.NaT
+        if col in df.columns:
+            df[f"{z}_in"] = pd.to_datetime(df[col], errors="coerce", dayfirst=True)
+        else:
+            df[f"{z}_in"] = pd.NaT
     
     df["Z1_in"] = df["t0"]
     
@@ -628,7 +620,7 @@ def parse_wagon(df: pd.DataFrame, trockner: str = None) -> pd.DataFrame:
     else:
         df["Entnahme"] = pd.NaT
     
-    # Calculate zone durations
+    # Zone durations
     pairs = [
         ("Z1", "Z2_in", "t0"),
         ("Z2", "Z3_in", "Z2_in"),
@@ -638,24 +630,33 @@ def parse_wagon(df: pd.DataFrame, trockner: str = None) -> pd.DataFrame:
     ]
     
     for z, later, earlier in pairs:
-        hours = (df[later] - df[earlier]).dt.total_seconds() / 3600
-        df[f"{z}_dur_calc"] = hours
+        if later in df.columns and earlier in df.columns:
+            hours = (df[later] - df[earlier]).dt.total_seconds() / 3600
+            df[f"{z}_dur_calc"] = hours
+        else:
+            df[f"{z}_dur_calc"] = np.nan
     
     for z in CONFIG["zones_seq"]:
         txt = f"Zeit in {z}"
         calc = f"{z}_dur_calc"
         out = f"{z}_dur"
-        df[out] = pd.to_timedelta(df[calc], unit="h")
+        
+        if calc in df.columns:
+            df[out] = pd.to_timedelta(df[calc], unit="h")
+        else:
+            df[out] = pd.NaT
+            
         if txt in df.columns:
             parsed = parse_duration_series(df[txt])
             mask = parsed.isna() | (parsed.dt.total_seconds() < 3600)
-            df[out] = parsed.where(~mask, df[out])
+            if out in df.columns:
+                df[out] = parsed.where(~mask, df[out])
     
     # Month/Year
     df["Month"] = df["t0"].dt.month
     df["Year"] = df["t0"].dt.year
     
-    # Filter rows without valid timestamp
+    # Filter rows without timestamp
     before_ts = len(df)
     df = df[df["t0"].notna()].copy()
     after_ts = len(df)
@@ -664,51 +665,34 @@ def parse_wagon(df: pd.DataFrame, trockner: str = None) -> pd.DataFrame:
         logger.warning(f"Removed {before_ts - after_ts} rows without valid timestamp")
     
     # Store Trockner info
-    df["Trockner"] = trockner if trockner else "ALL"
+    df["Trockner"] = trockner if trockner else "All"
     
     # ========================================
     # FINAL SUMMARY
     # ========================================
     logger.info("")
     logger.info("="*70)
-    logger.info(f"FINAL RESULT - TROCKNER {trockner or 'ALL'}")
+    logger.info(f"FINAL RESULT - TROCKNER: {trockner or 'ALL'}")
     logger.info("="*70)
     
     # By product
     product_summary = df.groupby("Produkt").agg({
         "m3": ["count", "sum", "mean"]
     }).round(4)
-    product_summary.columns = ["Wagons", "Volume_m3", "Avg_m3"]
+    product_summary.columns = ["Rows", "Volume_m3", "Avg_m3"]
     product_summary = product_summary.sort_values("Volume_m3", ascending=False)
     
     logger.info("By Product:")
     for prod, row in product_summary.iterrows():
-        logger.info(f"  {prod:6s}: {int(row['Wagons']):5d} wagons | {row['Volume_m3']:8.2f} m³ | {row['Avg_m3']:.4f} m³/wagon")
+        logger.info(f"  {prod:6s}: {int(row['Rows']):5d} rows | {row['Volume_m3']:8.2f} m³ | {row['Avg_m3']:.4f} m³/row")
     
-    total_wagons = len(df)
-    total_volume = df["m3"].sum()
-    avg_volume = total_volume / total_wagons if total_wagons > 0 else 0
+    total_rows = len(df)
+    total_vol = df["m3"].sum()
+    avg_vol = df["m3"].mean()
     
     logger.info("-"*70)
-    logger.info(f"TOTAL: {total_wagons:,} wagons | {total_volume:,.2f} m³ | {avg_volume:.4f} m³/wagon")
+    logger.info(f"TOTAL: {total_rows:,} wagon rows | {total_vol:,.2f} m³ | {avg_vol:.4f} m³/row")
     logger.info("="*70)
-    
-    return df
-
-
-def calculate_fallback_volume(df: pd.DataFrame) -> pd.DataFrame:
-    """Calculate volume from product specifications as fallback."""
-    logger.warning("Using fallback volume calculation...")
-    
-    def get_volume(row):
-        product = str(row.get("Produkt", "")).strip()
-        if product in PRODUCT_SPECIFICATIONS:
-            return PRODUCT_SPECIFICATIONS[product]["volume_m3"] * PLATES_PER_WAGON
-        return 3.5  # Default average
-    
-    df["m3"] = df.apply(get_volume, axis=1)
-    
-    logger.info(f"Fallback: {df['m3'].sum():.2f} m³ total, {df['m3'].mean():.4f} m³/wagon")
     
     return df
 
@@ -720,7 +704,10 @@ def build_intervals(row: pd.Series) -> List[Tuple[str, pd.Timestamp, pd.Timestam
     for z in CONFIG["zones_seq"]:
         z_in = row.get(f"{z}_in", pd.NaT)
         if pd.isna(z_in):
-            z_in = prev_end or row["t0"]
+            z_in = prev_end or row.get("t0", pd.NaT)
+        
+        if pd.isna(z_in):
+            continue
 
         z_dur = row.get(f"{z}_dur", pd.NaT)
         if pd.isna(z_dur):
@@ -737,6 +724,7 @@ def build_intervals(row: pd.Series) -> List[Tuple[str, pd.Timestamp, pd.Timestam
 def explode_intervals(df: pd.DataFrame) -> pd.DataFrame:
     logger.info("Creating zone intervals...")
     rows = []
+    
     for _, r in df.iterrows():
         for z, s, e in build_intervals(r):
             rows.append({
@@ -752,13 +740,27 @@ def explode_intervals(df: pd.DataFrame) -> pd.DataFrame:
             })
     
     result = pd.DataFrame(rows)
-    logger.info(f"Created {len(result)} zone intervals from {len(df)} wagons")
+    logger.info(f"Created {len(result)} zone intervals from {len(df)} wagon rows")
     return result
 
 
 def allocate_energy(e: pd.DataFrame, ivals: pd.DataFrame) -> pd.DataFrame:
-    """Allocate energy to products."""
+    """
+    Allocate energy to products.
+    
+    IMPORTANT: Energy is allocated ONLY to wagons in the intervals DataFrame.
+    If intervals only contain Trockner A wagons, energy is allocated only to those.
+    """
     logger.info("Allocating energy to products...")
+    
+    if ivals.empty:
+        logger.warning("No intervals to allocate energy to!")
+        return pd.DataFrame()
+    
+    # Log what we're allocating to
+    unique_trockner = ivals["Trockner"].unique()
+    logger.info(f"Allocating to Trockner(s): {unique_trockner}")
+    logger.info(f"Total intervals: {len(ivals)}")
     
     results = []
 
@@ -873,8 +875,7 @@ def allocate_energy(e: pd.DataFrame, ivals: pd.DataFrame) -> pd.DataFrame:
     total_el = final["Energy_electrical_kWh"].sum()
     total_energy = total_th + total_el
     
-    if total_el > 0:
-        ratio = total_th / total_el
+    if total_energy > 0:
         pct_th = (total_th / total_energy) * 100
         pct_el = (total_el / total_energy) * 100
         logger.info(f"✓ Allocated: Thermal={total_th:,.0f} kWh ({pct_th:.1f}%), Electrical={total_el:,.0f} kWh ({pct_el:.1f}%)")
@@ -902,10 +903,6 @@ def add_water_kpis(df: pd.DataFrame) -> pd.DataFrame:
     df["kWh_per_m3"] = safe_divide(df["Energy_kWh"], df["Volume_m3"])
     df["kWh_thermal_per_kg"] = safe_divide(df["Energy_thermal_kWh"], df["Water_kg"])
     df["kWh_per_kg"] = safe_divide(df["Energy_kWh"], df["Water_kg"])
-    
-    for col in ["kWh_thermal_per_m3", "kWh_per_m3", "kWh_thermal_per_kg", "kWh_per_kg"]:
-        if col in df.columns:
-            df[col] = df[col].clip(lower=0)
     
     return df
 
