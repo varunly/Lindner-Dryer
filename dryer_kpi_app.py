@@ -238,7 +238,9 @@ def validate_excel_file(file_path: str, file_description: str) -> bool:
 
 def run_analysis(energy_path: str, wagon_path: str, products_filter, month_filter, trockner_filter) -> dict:
     """
-    Run the complete KPI analysis with detailed debugging.
+    Run the complete KPI analysis with overlap period filtering.
+    
+    UPDATED: Filters both energy and wagon data to common time period only.
     """
     progress = st.progress(0)
     status = st.empty()
@@ -249,23 +251,30 @@ def run_analysis(energy_path: str, wagon_path: str, products_filter, month_filte
     try:
         # ===== PARSE ENERGY =====
         status.text("🔄 Parsing energy data...")
-        progress.progress(15)
+        progress.progress(10)
         
         try:
             e_raw = pd.read_excel(energy_path, sheet_name=CONFIG["energy_sheet"])
-        except Exception as e:
+        except Exception as ex:
             try:
                 e_raw = pd.read_excel(energy_path, sheet_name=CONFIG["energy_sheet"], engine='openpyxl')
             except:
-                raise ValueError(f"Cannot read energy file: {e}")
+                raise ValueError(f"Cannot read energy file: {ex}")
         
         e = parse_energy(e_raw)
         if e.empty:
             raise ValueError("Parsed energy data is empty.")
+        
+        # Capture energy date range
+        energy_start = e["E_start"].min()
+        energy_end = e["E_end"].max()
+        energy_hours_raw = len(e)
+        energy_thermal_raw = e["E_thermal_total_kWh"].sum()
+        energy_electrical_raw = e["E_el_kWh"].sum()
 
         # ===== PARSE WAGON DATA =====
         status.text("🔄 Parsing wagon tracking data...")
-        progress.progress(35)
+        progress.progress(25)
         
         try:
             w_raw = pd.read_excel(
@@ -273,7 +282,7 @@ def run_analysis(energy_path: str, wagon_path: str, products_filter, month_filte
                 sheet_name=CONFIG["wagon_sheet"],
                 header=CONFIG["wagon_header_row"],
             )
-        except Exception as e:
+        except Exception as ex:
             try:
                 w_raw = pd.read_excel(
                     wagon_path,
@@ -282,356 +291,160 @@ def run_analysis(energy_path: str, wagon_path: str, products_filter, month_filte
                     engine='openpyxl'
                 )
             except:
-                raise ValueError(f"Cannot read wagon file: {e}")
-        
-        raw_wagon_rows = len(w_raw)
-                # After: w_raw = pd.read_excel(...)
-                # ===== PARSE WAGON DATA =====
-        status.text("🔄 Parsing wagon tracking data...")
-        progress.progress(35)
-        
-        try:
-            w_raw = pd.read_excel(
-                wagon_path,
-                sheet_name=CONFIG["wagon_sheet"],
-                header=CONFIG["wagon_header_row"],
-            )
-        except Exception as e:
-            try:
-                w_raw = pd.read_excel(
-                    wagon_path,
-                    sheet_name=CONFIG["wagon_sheet"],
-                    header=CONFIG["wagon_header_row"],
-                    engine='openpyxl'
-                )
-            except:
-                raise ValueError(f"Cannot read wagon file: {e}")
+                raise ValueError(f"Cannot read wagon file: {ex}")
         
         raw_wagon_rows = len(w_raw)
         
-        # =========================================
-        # 🚨 ADD THIS DEBUG CODE HERE 🚨
-        # =========================================
+        # ===== DEBUG: Raw wagon file info =====
         with debug_container:
-            with st.expander("🚨🚨🚨 CRITICAL DEBUG 🚨🚨🚨", expanded=True):
-                st.error("IF YOU DON'T SEE THIS, THE NEW CODE ISN'T RUNNING!")
-                
-                # 1. Show what trockner filter is being passed
-                st.write(f"### 1. Trockner Filter Value")
-                st.write(f"**trockner_filter parameter:** `{trockner_filter}`")
-                st.write(f"**Type:** `{type(trockner_filter)}`")
-                
-                trockner_to_use_debug = trockner_filter if trockner_filter != "All" else None
-                st.write(f"**trockner_to_use:** `{trockner_to_use_debug}`")
-                
-                # 2. Clean column names and find Trockner column
-                st.write(f"### 2. Finding Trockner Column")
-                
-                w_test = w_raw.copy()
-                w_test.columns = [str(c).replace("\n", "").replace("\r", "").strip() for c in w_test.columns]
-                
-                trockner_col_test = None
-                for col in w_test.columns:
-                    if "trock" in col.lower():
-                        trockner_col_test = col
-                        break
-                
-                st.write(f"**Trockner column found:** `{trockner_col_test}`")
-                
-                if trockner_col_test:
-                    # 3. Show ALL unique Trockner values
-                    st.write(f"### 3. Trockner Values in File")
-                    
-                    trockner_raw = w_test[trockner_col_test].astype(str).str.strip().str.upper()
-                    unique_vals = trockner_raw.unique().tolist()
-                    
-                    st.write(f"**Unique values ({len(unique_vals)}):**")
-                    for v in unique_vals[:20]:
-                        count = (trockner_raw == v).sum()
-                        st.write(f"  - `'{v}'` : {count:,} rows")
-                    
-                    # 4. Manual count what SHOULD happen
-                    st.write(f"### 4. Expected Counts")
-                    
-                    # Filter to valid Trockner (A or B) only
-                    valid_trockner = trockner_raw.isin(["A", "B"])
-                    
-                    # Count A and B
-                    count_a = (trockner_raw == "A").sum()
-                    count_b = (trockner_raw == "B").sum()
-                    
-                    st.success(f"🅰️ **Trockner A:** {count_a:,} rows")
-                    st.success(f"🅱️ **Trockner B:** {count_b:,} rows")
-                    st.success(f"**Total valid:** {count_a + count_b:,} rows")
-                    
-                    # Show what filter will do
-                    if trockner_to_use_debug == "A":
-                        st.info(f"🎯 You selected A → Expected: **{count_a:,}** rows")
-                    elif trockner_to_use_debug == "B":
-                        st.info(f"🎯 You selected B → Expected: **{count_b:,}** rows")
-                    else:
-                        st.warning(f"⚠️ No filter (All) → Expected: **{count_a + count_b:,}** rows")
-        
-              # ===== CRITICAL DEBUG =====
-        with debug_container:
-            with st.expander("🚨 DEBUG 0: TROCKNER FILTER DIAGNOSTIC", expanded=True):
-                st.markdown("### 🔍 Why Trockner Filter Might Not Work")
-                
-                # Clean column names like parse_wagon does
-                w_test = w_raw.copy()
-                w_test.columns = [str(c).replace("\n", "").replace("\r", "").strip() for c in w_test.columns]
-                
-                # Show cleaned columns
-                st.write("**Cleaned column names (first 15):**")
-                for i, col in enumerate(w_test.columns[:15]):
-                    st.code(f"[{i:2d}] '{col}'")
-                
-                # Find Trockner column
-                trockner_col_found = None
-                for col in w_test.columns:
-                    if "trock" in col.lower():
-                        trockner_col_found = col
-                        break
-                
-                if trockner_col_found:
-                    st.success(f"✅ Found Trockner column: **'{trockner_col_found}'**")
-                    
-                    # Show raw values
-                    raw_vals = w_test[trockner_col_found].astype(str).str.strip()
-                    st.write("**Raw Trockner values (sample):**")
-                    st.write(raw_vals.head(20).tolist())
-                    
-                    # Show unique values
-                    unique_vals = raw_vals.unique()
-                    st.write(f"**Unique values ({len(unique_vals)}):** {unique_vals.tolist()[:20]}")
-                    
-                    # Clean and uppercase
-                    clean_vals = raw_vals.str.upper()
-                    st.write("**Value distribution (cleaned):**")
-                    val_counts = clean_vals.value_counts()
-                    for val, count in val_counts.items():
-                        st.write(f"  - '{val}': **{count:,}** rows")
-                    
-                    # Test filter
-                    st.markdown("---")
-                    st.markdown("### 🧪 Filter Test")
-                    
-                    filter_val = trockner_filter.upper() if trockner_filter != "All" else None
-                    st.write(f"**Requested filter:** {filter_val or 'None (All)'}")
-                    
-                    if filter_val:
-                        # Exact match test
-                        exact_mask = clean_vals == filter_val
-                        exact_count = exact_mask.sum()
-                        st.write(f"**Exact match '{filter_val}':** {exact_count:,} rows")
-                        
-                        # Contains test
-                        contains_mask = clean_vals.str.contains(filter_val, na=False)
-                        contains_count = contains_mask.sum()
-                        st.write(f"**Contains '{filter_val}':** {contains_count:,} rows")
-                        
-                        # Show sample matching rows
-                        if exact_count > 0:
-                            st.write("**Sample matching rows:**")
-                            st.dataframe(w_test[exact_mask].head(5)[[w_test.columns[0], trockner_col_found]])
-                        else:
-                            st.error(f"❌ NO ROWS MATCH '{filter_val}' exactly!")
-                            st.write("**This is why the filter isn't working!**")
-                            
-                            # Show what values ARE in the column
-                            st.write("**The column actually contains these values:**")
-                            for val in unique_vals[:10]:
-                                st.code(f"'{val}' (repr: {repr(val)})")
-                else:
-                    st.error("❌ Trockner column NOT FOUND!")
-                    st.write("Searched for columns containing 'trock'")
-        # ===== SHOW RAW DATA DEBUG INFO =====
-        with debug_container:
-            with st.expander("🔧 DEBUG 1: Raw Wagon File Analysis", expanded=True):
-                st.markdown("### 📄 Raw File Info")
+            with st.expander("🔧 DEBUG 1: Raw Wagon File Analysis", expanded=False):
                 st.write(f"**Total rows in raw file:** {raw_wagon_rows:,}")
                 st.write(f"**Total columns:** {len(w_raw.columns)}")
                 
-                # Show all column names with repr to see hidden characters
-                st.markdown("### 📋 Column Names (with hidden characters shown)")
-                col_list = list(w_raw.columns)
-                col_display = []
-                for i, col in enumerate(col_list[:40]):
-                    col_display.append(f"[{i:2d}] {repr(col)}")
-                st.code("\n".join(col_display), language="text")
-                
-                # Find and show Trockner column
-                st.markdown("### 🏭 Trockner Column Analysis")
-                trockner_col_found = None
-                trockner_col_index = None
-                
-                for i, col in enumerate(w_raw.columns):
-                    col_str = str(col).replace("\n", "").replace("\r", "").strip().lower()
-                    if "trock" in col_str:
-                        trockner_col_found = col
-                        trockner_col_index = i
-                        break
-                
-                if trockner_col_found:
-                    st.success(f"✅ Found Trockner column at index [{trockner_col_index}]: **{repr(trockner_col_found)}**")
-                    
-                    # Show value distribution
-                    trockner_values = w_raw[trockner_col_found].astype(str).str.strip().str.upper()
-                    value_counts = trockner_values.value_counts()
-                    
-                    st.markdown("**Value distribution in Trockner column:**")
-                    value_table = []
-                    for val, count in value_counts.items():
-                        value_table.append({"Value": repr(val), "Count": count})
-                    st.dataframe(pd.DataFrame(value_table), hide_index=True)
-                    
-                    # Show expected counts for filter
-                    if trockner_filter and trockner_filter != "All":
-                        expected_count = (trockner_values == trockner_filter.upper()).sum()
-                        st.info(f"🎯 **Expected rows for Trockner {trockner_filter}:** {expected_count:,}")
-                else:
-                    st.error("❌ Trockner column NOT FOUND!")
-                    st.write("Searched for columns containing 'trock' (case-insensitive)")
-                
-                # Show wagon number column (first column)
-                st.markdown("### 🚛 Wagon Number Column (First Column)")
-                first_col = w_raw.columns[0]
-                st.write(f"**Column name:** {repr(first_col)}")
-                st.write(f"**Sample values (first 10):**")
-                st.write(w_raw[first_col].head(10).tolist())
-                
-                # Show volume column
-                st.markdown("### 📦 Volume Column (m³)")
-                volume_col_found = None
-                volume_col_index = None
-                
-                for i, col in enumerate(w_raw.columns):
-                    col_str = str(col).strip()
-                    if "m³" in col_str or "m3" in col_str.lower():
-                        volume_col_found = col
-                        volume_col_index = i
-                        break
-                
-                if not volume_col_found and len(w_raw.columns) > 26:
-                    volume_col_found = w_raw.columns[26]
-                    volume_col_index = 26
-                    st.warning(f"⚠️ Using column at position 26 (AA): {repr(volume_col_found)}")
-                
-                if volume_col_found:
-                    st.success(f"✅ Found volume column at index [{volume_col_index}]: **{repr(volume_col_found)}**")
-                    sample_vol = pd.to_numeric(w_raw[volume_col_found], errors='coerce').dropna()
-                    st.write(f"**Valid numeric values:** {len(sample_vol):,}")
-                    st.write(f"**Sample values:** {sample_vol.head(10).tolist()}")
-                    st.write(f"**Range:** {sample_vol.min():.4f} - {sample_vol.max():.4f}")
-                    st.write(f"**Mean:** {sample_vol.mean():.4f}")
-                    st.write(f"**Sum:** {sample_vol.sum():,.2f}")
-                else:
-                    st.error("❌ Volume column NOT FOUND!")
+                # Show column names
+                col_list = list(w_raw.columns)[:20]
+                st.write("**First 20 columns:**")
+                for i, col in enumerate(col_list):
+                    st.code(f"[{i:2d}] {repr(col)}")
         
-        # Apply Trockner filter during parsing
+        # ===== APPLY TROCKNER FILTER =====
+        status.text(f"🔄 Parsing wagon data (Trockner: {trockner_filter})...")
+        progress.progress(35)
+        
         trockner_to_use = trockner_filter if trockner_filter != "All" else None
-        
-        # ===== MANUAL TROCKNER FILTER CHECK (BEFORE parse_wagon) =====
-        with debug_container:
-            with st.expander("🔧 DEBUG 2: Manual Trockner Filter Verification", expanded=True):
-                st.markdown("### 🔍 Pre-Parse Filter Check")
-                st.write(f"**Requested Trockner filter:** {trockner_to_use or 'None (All)'}")
-                
-                if trockner_to_use and trockner_col_found:
-                    # Clean column names like parse_wagon does
-                    w_raw_test = w_raw.copy()
-                    w_raw_test.columns = [str(c).replace("\n", "").replace("\r", "").strip() for c in w_raw_test.columns]
-                    
-                    st.markdown("**Column names after cleaning (removing newlines):**")
-                    cleaned_cols = []
-                    for i, (orig, clean) in enumerate(zip(w_raw.columns[:15], w_raw_test.columns[:15])):
-                        if repr(orig) != repr(clean):
-                            cleaned_cols.append(f"[{i:2d}] {repr(orig)} → '{clean}'")
-                        else:
-                            cleaned_cols.append(f"[{i:2d}] '{clean}'")
-                    st.code("\n".join(cleaned_cols), language="text")
-                    
-                    # Find trockner column in cleaned version
-                    trockner_col_clean = None
-                    for col in w_raw_test.columns:
-                        if "trock" in col.lower():
-                            trockner_col_clean = col
-                            break
-                    
-                    if trockner_col_clean:
-                        st.success(f"✅ Trockner column after cleaning: **'{trockner_col_clean}'**")
-                        
-                        # Clean values
-                        trockner_vals = w_raw_test[trockner_col_clean].astype(str).str.strip().str.upper()
-                        
-                        # Count matches
-                        exact_match = (trockner_vals == trockner_to_use.upper()).sum()
-                        st.write(f"**Rows matching '{trockner_to_use.upper()}':** {exact_match:,}")
-                        
-                        # Show sample of matching rows
-                        mask = trockner_vals == trockner_to_use.upper()
-                        sample_matching = w_raw_test[mask].head(5)
-                        
-                        if not sample_matching.empty:
-                            st.write("**Sample matching rows (first 5):**")
-                            display_cols = [w_raw_test.columns[0], trockner_col_clean]
-                            # Add Produkt if exists
-                            for col in w_raw_test.columns:
-                                if "produkt" in col.lower():
-                                    display_cols.append(col)
-                                    break
-                            display_cols = [c for c in display_cols if c in sample_matching.columns]
-                            st.dataframe(sample_matching[display_cols], hide_index=True)
-                    else:
-                        st.error("❌ Could not find Trockner column after cleaning!")
-                else:
-                    st.info("ℹ️ No Trockner filter applied or column not found")
-        
-        # ===== CALL parse_wagon =====
-        status.text(f"🔄 Parsing wagon data (Trockner: {trockner_to_use or 'All'})...")
         w = parse_wagon(w_raw, trockner=trockner_to_use)
         
         if w.empty:
             raise ValueError("Parsed wagon data is empty after Trockner filter.")
-
-        # Store counts AFTER Trockner filter, BEFORE product filter
+        
+        # Store counts after Trockner filter
         wagon_count_after_trockner = len(w)
         volume_after_trockner = w["m3"].sum()
-        
-        # Store filter info
         applied_trockner = trockner_to_use or "All"
         
-        # ===== SHOW POST-PARSE DEBUG INFO =====
+        # ===== DEBUG: After Trockner filter =====
         with debug_container:
-            with st.expander("🔧 DEBUG 3: After parse_wagon() Results", expanded=True):
-                st.markdown("### 📊 Parse Results")
-                st.write(f"**Trockner filter applied:** {applied_trockner}")
-                st.write(f"**Rows returned by parse_wagon:** {wagon_count_after_trockner:,}")
-                st.write(f"**Total volume:** {volume_after_trockner:,.2f} m³")
-                st.write(f"**Average volume per row:** {w['m3'].mean():.4f} m³")
+            with st.expander("🔧 DEBUG 2: After Trockner Filter", expanded=False):
+                st.write(f"**Trockner filter:** {applied_trockner}")
+                st.write(f"**Rows after filter:** {wagon_count_after_trockner:,}")
+                st.write(f"**Volume after filter:** {volume_after_trockner:,.2f} m³")
                 
                 if "Trockner" in w.columns:
-                    st.markdown("**Trockner values in parsed result:**")
+                    st.write("**Trockner values:**")
                     st.write(w["Trockner"].value_counts())
+        
+        # =============================================
+        # CRITICAL: CALCULATE AND APPLY OVERLAP FILTER
+        # =============================================
+        status.text("🔄 Calculating overlap period...")
+        progress.progress(40)
+        
+        # Get wagon date range
+        wagon_start = w["t0"].min()
+        wagon_end = w["t0"].max()
+        
+        # Calculate overlap period (common time frame)
+        overlap_start = max(energy_start, wagon_start)
+        overlap_end = min(energy_end, wagon_end)
+        overlap_days = (overlap_end - overlap_start).days
+        
+        # Store pre-overlap counts
+        wagons_before_overlap = len(w)
+        volume_before_overlap = w["m3"].sum()
+        energy_hours_before_overlap = len(e)
+        
+        # ===== DEBUG: Overlap period info =====
+        with debug_container:
+            with st.expander("📅 TIME PERIOD OVERLAP - CRITICAL", expanded=True):
+                st.markdown("### ⏰ Date Range Analysis")
                 
-                st.markdown("**Products in parsed result:**")
-                prod_counts = w["Produkt"].value_counts()
-                st.dataframe(prod_counts.reset_index().rename(columns={"index": "Product", "Produkt": "Product", "count": "Count"}), hide_index=True)
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.markdown("**📊 Energy Data**")
+                    st.write(f"Start: `{energy_start}`")
+                    st.write(f"End: `{energy_end}`")
+                    st.write(f"Hours: {energy_hours_raw:,}")
+                    st.write(f"Thermal: {energy_thermal_raw:,.0f} kWh")
+                    st.write(f"Electrical: {energy_electrical_raw:,.0f} kWh")
                 
-                st.markdown("**Sample of parsed data (first 10 rows):**")
-                display_cols = ["WG_Nr", "Produkt", "m3", "t0", "Month", "Trockner"]
-                display_cols = [c for c in display_cols if c in w.columns]
-                sample_df = w[display_cols].head(10).copy()
-                if "t0" in sample_df.columns:
-                    sample_df["t0"] = sample_df["t0"].dt.strftime("%Y-%m-%d %H:%M")
-                st.dataframe(sample_df, hide_index=True)
+                with col2:
+                    st.markdown("**🚛 Wagon Data**")
+                    st.write(f"Start: `{wagon_start}`")
+                    st.write(f"End: `{wagon_end}`")
+                    st.write(f"Wagons: {wagons_before_overlap:,}")
+                    st.write(f"Volume: {volume_before_overlap:,.2f} m³")
                 
-                # Validation check
-                if applied_trockner == "A":
-                    if wagon_count_after_trockner == 3692:
-                        st.success(f"✅ VALIDATION PASSED: Expected 3692 rows for Trockner A, got {wagon_count_after_trockner}")
-                    else:
-                        st.warning(f"⚠️ VALIDATION: Expected 3692 rows for Trockner A, got {wagon_count_after_trockner}")
+                st.markdown("---")
+                st.markdown("### ✅ OVERLAP PERIOD (Used for Analysis)")
+                
+                col3, col4, col5 = st.columns(3)
+                with col3:
+                    st.success(f"**Start:** {overlap_start}")
+                with col4:
+                    st.success(f"**End:** {overlap_end}")
+                with col5:
+                    st.success(f"**Duration:** {overlap_days} days")
+                
+                st.info("⚠️ Only data within this overlap period is used for all KPI calculations!")
+        
+        # ===== FILTER WAGONS TO OVERLAP PERIOD =====
+        status.text("🔄 Filtering wagons to overlap period...")
+        progress.progress(45)
+        
+        w = w[(w["t0"] >= overlap_start) & (w["t0"] <= overlap_end)].copy()
+        
+        wagons_after_overlap = len(w)
+        volume_after_overlap = w["m3"].sum()
+        wagons_removed_overlap = wagons_before_overlap - wagons_after_overlap
+        volume_removed_overlap = volume_before_overlap - volume_after_overlap
+        
+        # ===== FILTER ENERGY TO OVERLAP PERIOD =====
+        e = e[(e["E_start"] >= overlap_start) & (e["E_end"] <= overlap_end)].copy()
+        
+        energy_hours_after_overlap = len(e)
+        energy_thermal_after_overlap = e["E_thermal_total_kWh"].sum()
+        energy_electrical_after_overlap = e["E_el_kWh"].sum()
+        
+        # ===== DEBUG: After overlap filter =====
+        with debug_container:
+            with st.expander("🔧 DEBUG 3: After Overlap Filter", expanded=True):
+                st.markdown("### 🚛 Wagon Data")
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Before Overlap", f"{wagons_before_overlap:,}")
+                with col2:
+                    st.metric("After Overlap", f"{wagons_after_overlap:,}")
+                with col3:
+                    st.metric("Removed", f"{wagons_removed_overlap:,}", 
+                             delta=f"-{wagons_removed_overlap:,}" if wagons_removed_overlap > 0 else None,
+                             delta_color="inverse")
+                
+                st.write(f"Volume before: {volume_before_overlap:,.2f} m³")
+                st.write(f"Volume after: {volume_after_overlap:,.2f} m³")
+                st.write(f"Volume removed: {volume_removed_overlap:,.2f} m³")
+                
+                if wagons_removed_overlap > 0:
+                    st.warning(f"⚠️ {wagons_removed_overlap:,} wagons removed (outside energy data period)")
+                
+                st.markdown("---")
+                st.markdown("### ⚡ Energy Data")
+                col4, col5 = st.columns(2)
+                with col4:
+                    st.write(f"Hours before: {energy_hours_before_overlap:,}")
+                    st.write(f"Hours after: {energy_hours_after_overlap:,}")
+                with col5:
+                    st.write(f"Thermal after overlap: {energy_thermal_after_overlap:,.0f} kWh")
+                    st.write(f"Electrical after overlap: {energy_electrical_after_overlap:,.0f} kWh")
+        
+        if w.empty:
+            raise ValueError("No wagon data within the overlap period!")
+        
+        if e.empty:
+            raise ValueError("No energy data within the overlap period!")
+        
+        # Store counts after overlap filter
+        wagon_count_after_overlap = len(w)
+        volume_after_overlap_filter = w["m3"].sum()
         
         # ===== APPLY PRODUCT FILTER =====
         status.text("🔄 Applying product filters...")
@@ -640,7 +453,7 @@ def run_analysis(energy_path: str, wagon_path: str, products_filter, month_filte
         wagon_count_before_product_filter = len(w)
         volume_before_product_filter = w["m3"].sum()
         
-        # Store wagon data BEFORE product filter (for reference)
+        # Store wagon data before product filter
         w_before_product_filter = w.copy()
         
         if products_filter:
@@ -653,36 +466,24 @@ def run_analysis(energy_path: str, wagon_path: str, products_filter, month_filte
         
         # ===== DEBUG: After product filter =====
         with debug_container:
-            with st.expander("🔧 DEBUG 4: After Product Filter", expanded=True):
-                st.markdown("### 🧱 Product Filter Results")
-                st.write(f"**Product filter applied:** {products_filter}")
-                st.write(f"**Rows BEFORE product filter:** {wagon_count_before_product_filter:,}")
-                st.write(f"**Rows AFTER product filter:** {wagon_count_after_product_filter:,}")
+            with st.expander("🔧 DEBUG 4: After Product Filter", expanded=False):
+                st.write(f"**Product filter:** {products_filter}")
+                st.write(f"**Rows before:** {wagon_count_before_product_filter:,}")
+                st.write(f"**Rows after:** {wagon_count_after_product_filter:,}")
                 st.write(f"**Rows removed:** {wagon_count_before_product_filter - wagon_count_after_product_filter:,}")
-                
-                st.write(f"**Volume BEFORE:** {volume_before_product_filter:,.2f} m³")
-                st.write(f"**Volume AFTER:** {volume_after_product_filter:,.2f} m³")
-                
-                if wagon_count_before_product_filter != wagon_count_after_product_filter:
-                    st.warning(f"⚠️ Product filter removed {wagon_count_before_product_filter - wagon_count_after_product_filter:,} rows!")
-                    
-                    # Show which products were removed
-                    all_products_in_data = set(w_before_product_filter["Produkt"].unique())
-                    selected_products = set(products_filter) if products_filter else all_products_in_data
-                    removed_products = all_products_in_data - selected_products
-                    
-                    if removed_products:
-                        st.write(f"**Products removed by filter:** {removed_products}")
-                else:
-                    st.success("✅ No rows removed by product filter")
+                st.write(f"**Volume before:** {volume_before_product_filter:,.2f} m³")
+                st.write(f"**Volume after:** {volume_after_product_filter:,.2f} m³")
         
-        # Key metrics from wagon data (AFTER product filter)
+        # Key metrics from wagon data
         total_wagons = len(w)
         total_volume = w["m3"].sum()
         
         status.text(f"📊 Found {total_wagons:,} wagon rows with {total_volume:,.2f} m³ total volume")
 
         # ===== APPLY MONTH FILTER =====
+        status.text("🔄 Applying month filter...")
+        progress.progress(55)
+        
         wagon_count_before_month_filter = len(w)
         volume_before_month_filter = w["m3"].sum()
         
@@ -697,39 +498,48 @@ def run_analysis(energy_path: str, wagon_path: str, products_filter, month_filte
         
         # ===== DEBUG: After month filter =====
         with debug_container:
-            with st.expander("🔧 DEBUG 5: After Month Filter", expanded=True):
-                st.markdown("### 📅 Month Filter Results")
-                st.write(f"**Month filter applied:** {month_filter or 'None (all months)'}")
-                st.write(f"**Rows BEFORE month filter:** {wagon_count_before_month_filter:,}")
-                st.write(f"**Rows AFTER month filter:** {wagon_count_after_month_filter:,}")
-                st.write(f"**Rows removed:** {wagon_count_before_month_filter - wagon_count_after_month_filter:,}")
-                
-                st.write(f"**Volume BEFORE:** {volume_before_month_filter:,.2f} m³")
-                st.write(f"**Volume AFTER:** {volume_after_month_filter:,.2f} m³")
-                
-                if month_filter:
-                    st.info(f"ℹ️ Showing data for Month {month_filter} only")
-                else:
-                    st.success("✅ No month filter applied - showing all months")
+            with st.expander("🔧 DEBUG 5: After Month Filter", expanded=False):
+                st.write(f"**Month filter:** {month_filter or 'None (all months)'}")
+                st.write(f"**Rows before:** {wagon_count_before_month_filter:,}")
+                st.write(f"**Rows after:** {wagon_count_after_month_filter:,}")
+                st.write(f"**Volume before:** {volume_before_month_filter:,.2f} m³")
+                st.write(f"**Volume after:** {volume_after_month_filter:,.2f} m³")
 
         # ===== BUILD INTERVALS =====
         status.text("🔄 Building zone intervals...")
         progress.progress(65)
+        
         ivals = explode_intervals(w)
         if ivals.empty:
             raise ValueError("Zone intervals could not be created.")
+        
+        with debug_container:
+            with st.expander("🔧 DEBUG 6: Zone Intervals", expanded=False):
+                st.write(f"**Total intervals:** {len(ivals):,}")
+                st.write(f"**Zones:** {ivals['Zone'].unique().tolist()}")
+                st.write("**Intervals per zone:**")
+                st.write(ivals.groupby("Zone").size())
 
         # ===== ALLOCATE ENERGY =====
         status.text("🔄 Allocating energy to products...")
         progress.progress(80)
+        
         alloc = allocate_energy(e, ivals)
         if alloc.empty:
             raise ValueError("Energy allocation result is empty.")
+        
+        with debug_container:
+            with st.expander("🔧 DEBUG 7: Energy Allocation Results", expanded=False):
+                st.write(f"**Allocation records:** {len(alloc):,}")
+                st.write(f"**Thermal allocated:** {alloc['Energy_thermal_kWh'].sum():,.0f} kWh")
+                st.write(f"**Electrical allocated:** {alloc['Energy_electrical_kWh'].sum():,.0f} kWh")
+                st.write(f"**Total allocated:** {alloc['Energy_share_kWh'].sum():,.0f} kWh")
 
         # ===== AGGREGATE KPIs =====
         status.text("🔄 Aggregating KPIs...")
         progress.progress(90)
 
+        # Monthly summary by product and zone
         summary = alloc.groupby(["Month", "Produkt", "Zone"], as_index=False).agg(
             Energy_thermal_kWh=("Energy_thermal_kWh", "sum"),
             Energy_electrical_kWh=("Energy_electrical_kWh", "sum"),
@@ -750,6 +560,7 @@ def run_analysis(energy_path: str, wagon_path: str, products_filter, month_filte
         summary = add_water_kpis(summary)
         summary = summary.fillna(0)
 
+        # Yearly summary by product and zone
         yearly = summary.groupby(["Produkt", "Zone"], as_index=False).agg(
             Energy_thermal_kWh=("Energy_thermal_kWh", "sum"),
             Energy_electrical_kWh=("Energy_electrical_kWh", "sum"),
@@ -780,6 +591,7 @@ def run_analysis(energy_path: str, wagon_path: str, products_filter, month_filte
         )
         yearly = yearly.fillna(0)
 
+        # Product totals by month
         product_totals = summary.groupby(["Month", "Produkt"], as_index=False).agg(
             Energy_thermal_kWh=("Energy_thermal_kWh", "sum"),
             Energy_electrical_kWh=("Energy_electrical_kWh", "sum"),
@@ -813,7 +625,9 @@ def run_analysis(energy_path: str, wagon_path: str, products_filter, month_filte
         progress.progress(100)
         status.text("✅ Analysis complete!")
 
+        # ===== RETURN RESULTS =====
         return {
+            # Core data
             "energy": e,
             "wagons": w,
             "wagons_before_product_filter": w_before_product_filter,
@@ -822,19 +636,53 @@ def run_analysis(energy_path: str, wagon_path: str, products_filter, month_filte
             "summary": summary,
             "yearly": yearly,
             "product_totals": product_totals,
+            
+            # Trockner info
             "applied_trockner": applied_trockner,
-            # Detailed counts for debugging/verification
+            
+            # Date range info (NEW)
+            "energy_start": energy_start,
+            "energy_end": energy_end,
+            "wagon_start": wagon_start,
+            "wagon_end": wagon_end,
+            "overlap_start": overlap_start,
+            "overlap_end": overlap_end,
+            "overlap_days": overlap_days,
+            
+            # Raw totals (before any filtering)
             "raw_wagon_file_rows": raw_wagon_rows,
+            "energy_hours_raw": energy_hours_raw,
+            "energy_thermal_raw": energy_thermal_raw,
+            "energy_electrical_raw": energy_electrical_raw,
+            
+            # After Trockner filter
             "wagon_count_after_trockner": wagon_count_after_trockner,
             "volume_after_trockner": volume_after_trockner,
+            
+            # After overlap filter (NEW)
+            "wagons_before_overlap": wagons_before_overlap,
+            "volume_before_overlap": volume_before_overlap,
+            "wagon_count_after_overlap": wagon_count_after_overlap,
+            "volume_after_overlap": volume_after_overlap_filter,
+            "wagons_removed_overlap": wagons_removed_overlap,
+            "volume_removed_overlap": volume_removed_overlap,
+            "energy_hours_after_overlap": energy_hours_after_overlap,
+            "energy_thermal_after_overlap": energy_thermal_after_overlap,
+            "energy_electrical_after_overlap": energy_electrical_after_overlap,
+            
+            # After product filter
             "wagon_count_before_product_filter": wagon_count_before_product_filter,
             "wagon_count_after_product_filter": wagon_count_after_product_filter,
             "volume_before_product_filter": volume_before_product_filter,
             "volume_after_product_filter": volume_after_product_filter,
+            
+            # After month filter
             "wagon_count_before_month_filter": wagon_count_before_month_filter,
             "wagon_count_after_month_filter": wagon_count_after_month_filter,
             "volume_before_month_filter": volume_before_month_filter,
             "volume_after_month_filter": volume_after_month_filter,
+            
+            # Filter settings
             "products_filter_applied": products_filter,
             "month_filter_applied": month_filter,
         }
@@ -2487,6 +2335,7 @@ Verification:
         st.error(f"❌ Display error: {e}")
         with st.expander("🔍 View Error Details"):
             st.exception(e)
+
 
 
 
