@@ -436,7 +436,57 @@ WATER_PER_M3_KG = {
     for product, spec in PRODUCT_SPECIFICATIONS.items()
 }
 
-
+def add_water_kpis(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Add water-related KPIs to a DataFrame.
+    
+    Parameters:
+        df: DataFrame with columns 'Produkt' and 'Volume_m3'
+        
+    Returns:
+        DataFrame with added columns:
+        - Water_kg: Total water evaporated
+        - Water_per_m3: Water per cubic meter
+        - kWh_per_kg: Energy per kg of water (if Energy_kWh exists)
+        - kWh_thermal_per_kg: Thermal energy per kg of water (if exists)
+    """
+    df = df.copy()
+    
+    # Calculate water per m³ for each product
+    def get_water_per_m3(product: str) -> float:
+        if product in PRODUCT_SPECIFICATIONS:
+            return PRODUCT_SPECIFICATIONS[product]["water_per_m3_kg"]
+        return WATER_PER_M3_KG.get(product, 180.0)  # Default fallback
+    
+    # Add water_per_m3 column
+    if "Produkt" in df.columns:
+        df["Water_per_m3"] = df["Produkt"].apply(get_water_per_m3)
+    else:
+        df["Water_per_m3"] = 180.0  # Default
+    
+    # Calculate total water
+    if "Volume_m3" in df.columns:
+        df["Water_kg"] = df["Volume_m3"] * df["Water_per_m3"]
+    else:
+        df["Water_kg"] = 0.0
+    
+    # Calculate kWh per kg of water
+    if "Energy_kWh" in df.columns and "Water_kg" in df.columns:
+        df["kWh_per_kg"] = np.where(
+            df["Water_kg"] > 0,
+            df["Energy_kWh"] / df["Water_kg"],
+            0.0
+        )
+    
+    # Calculate thermal kWh per kg of water
+    if "Energy_thermal_kWh" in df.columns and "Water_kg" in df.columns:
+        df["kWh_thermal_per_kg"] = np.where(
+            df["Water_kg"] > 0,
+            df["Energy_thermal_kWh"] / df["Water_kg"],
+            0.0
+        )
+    
+    return df
 def safe_divide(numerator, denominator, default=0.0):
     """Safe division that handles zero and NaN values."""
     with np.errstate(divide='ignore', invalid='ignore'):
@@ -1647,6 +1697,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
