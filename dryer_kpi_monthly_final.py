@@ -1296,20 +1296,37 @@ def explode_intervals(df: pd.DataFrame) -> pd.DataFrame:
 
 def allocate_energy(e: pd.DataFrame, ivals: pd.DataFrame) -> pd.DataFrame:
     """
-    VERSION 5.1 - PROPORTIONAL ELECTRICAL ALLOCATION
+    VERSION 5.2 - FIXED ELECTRICAL FILTERING
     
-    Thermal: allocated per zone (each zone has own gas meter)
-    Electrical: allocated proportionally to thermal (shared system)
+    Key fixes:
+    1. Thermal: allocated per zone (each zone has own gas meter)
+    2. Electrical: Use TOTAL electrical from input (not filtered)
+    3. Allocate electrical proportionally to thermal share
     """
     logger.info("="*70)
-    logger.info("ALLOCATE_ENERGY VERSION 5.1 - PROPORTIONAL METHOD")
+    logger.info("ALLOCATE_ENERGY VERSION 5.2 - CORRECT ELECTRICAL TOTAL")
     logger.info("="*70)
     
     if ivals.empty or e.empty:
         logger.warning("No data to allocate!")
         return pd.DataFrame()
     
-    # STEP 1: Filter to overlap period
+    # ========================================
+    # STEP 1: CAPTURE TOTAL ENERGY BEFORE ANY FILTERING
+    # ========================================
+    # This is the REAL total that should appear in KPIs
+    TOTAL_THERMAL_INPUT = e["E_thermal_total_kWh"].sum()
+    TOTAL_ELECTRICAL_INPUT = e["E_el_kWh"].sum()
+    TOTAL_ENERGY_INPUT = TOTAL_THERMAL_INPUT + TOTAL_ELECTRICAL_INPUT
+    
+    logger.info("STEP 1: TOTAL ENERGY IN FILE (before filtering)")
+    logger.info(f"  Thermal:    {TOTAL_THERMAL_INPUT:>12,.0f} kWh")
+    logger.info(f"  Electrical: {TOTAL_ELECTRICAL_INPUT:>12,.0f} kWh  ← This should be ~84,233")
+    logger.info(f"  Total:      {TOTAL_ENERGY_INPUT:>12,.0f} kWh")
+    
+    # ========================================
+    # STEP 2: FILTER TO OVERLAP PERIOD (for thermal allocation only)
+    # ========================================
     energy_start = e["E_start"].min()
     energy_end = e["E_end"].max()
     wagon_start = ivals["P_start"].min()
@@ -1321,28 +1338,38 @@ def allocate_energy(e: pd.DataFrame, ivals: pd.DataFrame) -> pd.DataFrame:
     if overlap_start >= overlap_end:
         raise ValueError("No time overlap between energy and wagon data!")
     
-    e = e[(e["E_end"] > overlap_start) & (e["E_start"] < overlap_end)].copy()
-    ivals = ivals[(ivals["P_end"] > overlap_start) & (ivals["P_start"] < overlap_end)].copy()
+    logger.info(f"\nSTEP 2: TIME OVERLAP")
+    logger.info(f"  Energy: {energy_start} to {energy_end}")
+    logger.info(f"  Wagons: {wagon_start} to {wagon_end}")
+    logger.info(f"  Overlap: {overlap_start} to {overlap_end}")
     
-    # Track input
-    input_thermal = e["E_thermal_total_kWh"].sum()
-    input_electrical = e["E_el_kWh"].sum()
-    input_total = input_thermal + input_electrical
+    # Filter for thermal allocation
+    e_filtered = e[(e["E_end"] > overlap_start) & (e["E_start"] < overlap_end)].copy()
+    ivals_filtered = ivals[(ivals["P_end"] > overlap_start) & (ivals["P_start"] < overlap_end)].copy()
     
-    logger.info(f"Input: Thermal={input_thermal:,.0f}, Electrical={input_electrical:,.0f}, Total={input_total:,.0f}")
+    filtered_thermal = e_filtered["E_thermal_total_kWh"].sum()
+    filtered_electrical = e_filtered["E_el_kWh"].sum()
     
-    # STEP 2: Allocate thermal by zone
-    logger.info("Allocating thermal energy by zone...")
+    logger.info(f"\n  After filtering:")
+    logger.info(f"    Thermal:    {filtered_thermal:,.0f} kWh (used for zone allocation)")
+    logger.info(f"    Electrical: {filtered_electrical:,.0f} kWh (filtered - NOT used)")
+    logger.info(f"    Hours: {len(e_filtered):,}")
+    
+    # ========================================
+    # STEP 3: ALLOCATE THERMAL BY ZONE
+    # ========================================
+    logger.info("\nSTEP 3: ALLOCATING THERMAL ENERGY BY ZONE")
+    
     thermal_results = []
     
     for z_key, z_name in ZONE_ENERGY_MAPPING.items():
         thermal_col = f"E_thermal_{z_name}_kWh"
         
-        if thermal_col not in e.columns:
+        if thermal_col not in e_filtered.columns:
             continue
         
-        e_zone = e[e[thermal_col] > 0].copy()
-        iv_zone = ivals[ivals["Zone"] == z_key].copy()
+        e_zone = e_filtered[e_filtered[thermal_col] > 0].copy()
+        iv_zone = ivals_filtered[ivals_filtered["Zone"] == z_key].copy()
         
         if e_zone.empty or iv_zone.empty:
             continue
@@ -1391,7 +1418,9 @@ def allocate_energy(e: pd.DataFrame, ivals: pd.DataFrame) -> pd.DataFrame:
         
         if zone_records:
             zone_df = pd.concat(zone_records, ignore_index=True)
-            logger.info(f"  {z_key}: {zone_df['Energy_thermal_kWh'].sum():,.0f} kWh allocated")
+            zone_allocated = zone_df["Energy_thermal_kWh"].sum()
+            pct = (zone_allocated / zone_input * 100) if zone_input > 0 else 0
+            logger.info(f"  {z_key}: {zone_allocated:,.0f} kWh ({pct:.1f}%)")
             thermal_results.append(zone_df)
     
     if not thermal_results:
@@ -1400,36 +1429,75 @@ def allocate_energy(e: pd.DataFrame, ivals: pd.DataFrame) -> pd.DataFrame:
     
     final = pd.concat(thermal_results, ignore_index=True)
     thermal_allocated = final["Energy_thermal_kWh"].sum()
-    logger.info(f"Total thermal allocated: {thermal_allocated:,.0f} kWh ({thermal_allocated/input_thermal*100:.1f}%)")
+    logger.info(f"\n  Total thermal allocated: {thermal_allocated:,.0f} kWh")
     
-    # STEP 3: Allocate electrical PROPORTIONALLY
-    # This is the key fix - no merging, just proportional allocation
-    logger.info("Allocating electrical proportionally...")
+    # ========================================
+    # STEP 4: ALLOCATE ELECTRICAL PROPORTIONALLY
+    # USE THE FULL ELECTRICAL TOTAL (84,233 kWh), NOT FILTERED!
+    # ========================================
+    logger.info("\nSTEP 4: ALLOCATING ELECTRICAL (proportional to thermal)")
+    logger.info(f"  Using FULL electrical input: {TOTAL_ELECTRICAL_INPUT:,.0f} kWh")
     
-    ratio = input_electrical / thermal_allocated if thermal_allocated > 0 else 0
-    logger.info(f"Electrical/Thermal ratio: {ratio:.6f}")
+    # Calculate each row's share of total thermal
+    # Then allocate that same share of TOTAL electrical
+    total_thermal_allocated = final["Energy_thermal_kWh"].sum()
     
-    # Simply multiply thermal by ratio to get electrical
-    final["Energy_electrical_kWh"] = final["Energy_thermal_kWh"] * ratio
+    if total_thermal_allocated > 0:
+        # Each row's share of thermal = row_thermal / total_thermal
+        # Each row's electrical = share × TOTAL_ELECTRICAL_INPUT
+        final["thermal_share"] = final["Energy_thermal_kWh"] / total_thermal_allocated
+        final["Energy_electrical_kWh"] = final["thermal_share"] * TOTAL_ELECTRICAL_INPUT
+        final = final.drop(columns=["thermal_share"])
+    else:
+        final["Energy_electrical_kWh"] = 0.0
     
     electrical_allocated = final["Energy_electrical_kWh"].sum()
-    logger.info(f"Electrical allocated: {electrical_allocated:,.0f} kWh ({electrical_allocated/input_electrical*100:.1f}%)")
+    logger.info(f"  Electrical allocated: {electrical_allocated:,.0f} kWh")
     
-    # STEP 4: Finalize
+    # Verify electrical allocation
+    elec_error = abs(electrical_allocated - TOTAL_ELECTRICAL_INPUT)
+    if elec_error < 1:
+        logger.info(f"  ✅ Electrical matches input perfectly!")
+    else:
+        logger.warning(f"  ⚠️ Electrical difference: {elec_error:.0f} kWh")
+    
+    # ========================================
+    # STEP 5: FINALIZE
+    # ========================================
+    logger.info("\nSTEP 5: FINALIZING")
+    
     final["Energy_share_kWh"] = final["Energy_thermal_kWh"] + final["Energy_electrical_kWh"]
     final = final.rename(columns={"Overlap_h": "Hour_share"})
     final = final[(final["Energy_thermal_kWh"] >= 0) & (final["m3"] > 0)]
     
-    # Summary
+    # ========================================
+    # STEP 6: SUMMARY
+    # ========================================
     output_thermal = final["Energy_thermal_kWh"].sum()
     output_electrical = final["Energy_electrical_kWh"].sum()
     output_total = final["Energy_share_kWh"].sum()
     
+    # Calculate percentages vs ORIGINAL input (not filtered)
+    thermal_pct = (output_thermal / TOTAL_THERMAL_INPUT * 100) if TOTAL_THERMAL_INPUT > 0 else 0
+    electrical_pct = (output_electrical / TOTAL_ELECTRICAL_INPUT * 100) if TOTAL_ELECTRICAL_INPUT > 0 else 0
+    total_pct = (output_total / TOTAL_ENERGY_INPUT * 100) if TOTAL_ENERGY_INPUT > 0 else 0
+    
+    logger.info("\n" + "="*70)
+    logger.info("ALLOCATION SUMMARY (vs original input)")
     logger.info("="*70)
-    logger.info("FINAL SUMMARY")
-    logger.info(f"Thermal:    {input_thermal:>12,.0f} → {output_thermal:>12,.0f} ({output_thermal/input_thermal*100:.1f}%)")
-    logger.info(f"Electrical: {input_electrical:>12,.0f} → {output_electrical:>12,.0f} ({output_electrical/input_electrical*100:.1f}%)")
-    logger.info(f"Total:      {input_total:>12,.0f} → {output_total:>12,.0f} ({output_total/input_total*100:.1f}%)")
+    logger.info(f"{'Type':<12} {'Input':>15} {'Output':>15} {'Ratio':>10}")
+    logger.info("-"*55)
+    logger.info(f"{'Thermal':<12} {TOTAL_THERMAL_INPUT:>15,.0f} {output_thermal:>15,.0f} {thermal_pct:>9.1f}%")
+    logger.info(f"{'Electrical':<12} {TOTAL_ELECTRICAL_INPUT:>15,.0f} {output_electrical:>15,.0f} {electrical_pct:>9.1f}%")
+    logger.info(f"{'TOTAL':<12} {TOTAL_ENERGY_INPUT:>15,.0f} {output_total:>15,.0f} {total_pct:>9.1f}%")
+    logger.info("="*70)
+    
+    if electrical_pct > 99 and electrical_pct < 101:
+        logger.info("✅ Electrical allocation: CORRECT!")
+    else:
+        logger.error(f"❌ Electrical allocation error: {electrical_pct:.1f}%")
+    
+    logger.info(f"\nTotal records: {len(final):,}")
     logger.info("="*70)
     
     return final
@@ -1566,6 +1634,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
