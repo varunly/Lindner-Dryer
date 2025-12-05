@@ -857,9 +857,20 @@ if st.session_state.analysis_complete and st.session_state.results:
             unique_wagon_numbers = wagons_df["WG_Nr"].nunique()
 
             # ===== ENERGY TOTALS =====
+# Use values from allocation results to ensure correctness
             total_thermal = float(yearly["Energy_thermal_kWh"].sum())
             total_electrical = float(yearly["Energy_electrical_kWh"].sum())
             total_energy = float(yearly["Energy_kWh"].sum())
+            
+            # DEBUG: Check if electrical is correct
+            expected_electrical = results.get("energy_electrical_raw", 0)
+            st.write(f"DEBUG: total_electrical={total_electrical:,.0f}, expected={expected_electrical:,.0f}")
+            
+            # If electrical from yearly is wrong, use the raw value
+            if total_electrical < expected_electrical * 0.5:
+                st.warning(f"⚠️ Electrical mismatch! Using raw value: {expected_electrical:,.0f} kWh")
+                total_electrical = float(expected_electrical)
+                total_energy = total_thermal + total_electrical
 
             # ===== WATER CALCULATION =====
             product_volume_all = wagons_df.groupby("Produkt")["m3"].sum().reset_index()
@@ -2341,6 +2352,7 @@ Verification:
         st.error(f"❌ Display error: {e}")
         with st.expander("🔍 View Error Details"):
             st.exception(e)
+
 
 
 
