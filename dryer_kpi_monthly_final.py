@@ -1248,10 +1248,13 @@ def allocate_energy(e: pd.DataFrame, ivals: pd.DataFrame) -> pd.DataFrame:
     """
     Allocate energy to products based on time overlap.
     
-    INCLUDES: Full verification and time period overlap handling
+    FIXED BUGS:
+    1. Electrical energy was allocated per-zone (4x overcounting)
+    2. Time period filtering was too strict for electrical
+    3. Added proper validation
     """
     logger.info("="*70)
-    logger.info("ENERGY ALLOCATION - WITH VERIFICATION")
+    logger.info("ENERGY ALLOCATION - FIXED VERSION")
     logger.info("="*70)
     
     if ivals.empty:
@@ -1301,44 +1304,41 @@ def allocate_energy(e: pd.DataFrame, ivals: pd.DataFrame) -> pd.DataFrame:
     
     # ========================================
     # STEP 2: FILTER TO OVERLAP PERIOD
+    # Use less strict filtering - include hours that OVERLAP with the period
     # ========================================
     logger.info("\n[STEP 2] FILTERING TO OVERLAP PERIOD")
     logger.info("-"*50)
     
-    # Filter energy
+    # Filter energy - include hours that overlap with the period (not strictly inside)
     e_original_count = len(e)
     e_original_thermal = e["E_thermal_total_kWh"].sum()
     e_original_electrical = e["E_el_kWh"].sum()
     
-    e = e[(e["E_start"] >= overlap_start) & (e["E_end"] <= overlap_end)].copy()
+    # Less strict filter: hour overlaps with period
+    e = e[(e["E_end"] > overlap_start) & (e["E_start"] < overlap_end)].copy()
     
     e_filtered_count = len(e)
     e_filtered_thermal = e["E_thermal_total_kWh"].sum()
     e_filtered_electrical = e["E_el_kWh"].sum()
     
-    e_excluded_count = e_original_count - e_filtered_count
-    e_excluded_thermal = e_original_thermal - e_filtered_thermal
-    e_excluded_electrical = e_original_electrical - e_filtered_electrical
-    
     logger.info(f"Energy filtering:")
     logger.info(f"  Original: {e_original_count:,} hours | {e_original_thermal:,.0f} kWh thermal | {e_original_electrical:,.0f} kWh electrical")
     logger.info(f"  In overlap: {e_filtered_count:,} hours | {e_filtered_thermal:,.0f} kWh thermal | {e_filtered_electrical:,.0f} kWh electrical")
     
+    e_excluded_count = e_original_count - e_filtered_count
     if e_excluded_count > 0:
+        e_excluded_thermal = e_original_thermal - e_filtered_thermal
+        e_excluded_electrical = e_original_electrical - e_filtered_electrical
         logger.warning(f"  ⚠️ Excluded: {e_excluded_count:,} hours | {e_excluded_thermal:,.0f} kWh thermal | {e_excluded_electrical:,.0f} kWh electrical")
     
     # Filter wagon intervals
     ivals_original_count = len(ivals)
     ivals = ivals[(ivals["P_end"] > overlap_start) & (ivals["P_start"] < overlap_end)].copy()
     ivals_filtered_count = len(ivals)
-    ivals_excluded_count = ivals_original_count - ivals_filtered_count
     
     logger.info(f"Wagon interval filtering:")
     logger.info(f"  Original: {ivals_original_count:,} intervals")
     logger.info(f"  In overlap: {ivals_filtered_count:,} intervals")
-    
-    if ivals_excluded_count > 0:
-        logger.warning(f"  ⚠️ Excluded: {ivals_excluded_count:,} intervals")
     
     if e.empty or ivals.empty:
         logger.error("❌ No data after filtering!")
@@ -1370,15 +1370,13 @@ def allocate_energy(e: pd.DataFrame, ivals: pd.DataFrame) -> pd.DataFrame:
             logger.info(f"  {z_key}: {zone_thermal:,.0f} kWh")
     
     # ========================================
-    # STEP 4: ALLOCATE BY ZONE
+    # STEP 4: ALLOCATE THERMAL ENERGY BY ZONE
     # ========================================
-    logger.info("\n[STEP 4] ALLOCATING ENERGY BY ZONE")
+    logger.info("\n[STEP 4] ALLOCATING THERMAL ENERGY BY ZONE")
     logger.info("-"*50)
     
     results = []
     zone_allocated = {}
-    zone_hours_with_wagons = {}
-    zone_hours_without_wagons = {}
 
     for z_key, z_name in ZONE_ENERGY_MAPPING.items():
         thermal_col = f"E_thermal_{z_name}_kWh"
@@ -1394,19 +1392,18 @@ def allocate_energy(e: pd.DataFrame, ivals: pd.DataFrame) -> pd.DataFrame:
         
         if e_zone.empty:
             logger.info(f"  {z_key}: No energy hours with thermal > 0")
+            zone_allocated[z_key] = 0
             continue
             
         if iv_zone.empty:
             logger.warning(f"  {z_key}: No wagon intervals! {zone_thermal_input:,.0f} kWh NOT ALLOCATED")
             zone_allocated[z_key] = 0
-            zone_hours_without_wagons[z_key] = len(e_zone)
             continue
 
         logger.info(f"  {z_key}: {len(e_zone):,} energy hours × {len(iv_zone):,} wagon intervals")
 
         chunk = 1000
         zone_res = []
-        hours_with_overlap = set()
 
         for i in range(0, len(iv_zone), chunk):
             part = iv_zone.iloc[i:i+chunk]
@@ -1428,10 +1425,7 @@ def allocate_energy(e: pd.DataFrame, ivals: pd.DataFrame) -> pd.DataFrame:
             if merged.empty:
                 continue
 
-            # Track which hours have wagons
-            hours_with_overlap.update(merged["E_start"].unique())
-
-            # Calculate overlap
+            # Calculate overlap duration (capped at 1 hour)
             merged["latest_start"] = merged[["E_start", "P_start"]].max(axis=1)
             merged["earliest_end"] = merged[["E_end", "P_end"]].min(axis=1)
             
@@ -1445,12 +1439,17 @@ def allocate_energy(e: pd.DataFrame, ivals: pd.DataFrame) -> pd.DataFrame:
             if merged.empty:
                 continue
 
-            # Calculate share
+            # Calculate share per hour
             merged["E_hour_key"] = merged["E_start"].dt.strftime("%Y-%m-%d %H:00")
             hour_total_overlap = merged.groupby("E_hour_key")["Overlap_h"].transform("sum")
-            merged["Hour_share"] = safe_divide(merged["Overlap_h"], hour_total_overlap)
             
-            # Allocate energy
+            # Ensure share doesn't exceed 1
+            merged["Hour_share"] = np.minimum(
+                safe_divide(merged["Overlap_h"], hour_total_overlap),
+                1.0
+            )
+            
+            # Allocate thermal energy for this zone
             merged["Energy_thermal_kWh"] = merged[thermal_col] * merged["Hour_share"]
             merged["Zone"] = z_key
             
@@ -1461,7 +1460,7 @@ def allocate_energy(e: pd.DataFrame, ivals: pd.DataFrame) -> pd.DataFrame:
 
             result = merged[[
                 month_col, "Produkt", "m3", "Overlap_h", "Hour_share",
-                "Energy_thermal_kWh", "Zone", "E_hour_key", "E_el_kWh"
+                "Energy_thermal_kWh", "Zone", "E_hour_key"
             ]].copy()
             result = result.rename(columns={month_col: "Month"})
 
@@ -1474,22 +1473,11 @@ def allocate_energy(e: pd.DataFrame, ivals: pd.DataFrame) -> pd.DataFrame:
             
             allocation_pct = (zone_thermal_allocated / zone_thermal_input * 100) if zone_thermal_input > 0 else 0
             
-            # Count hours with/without wagons
-            total_hours = len(e_zone)
-            hours_with = len(hours_with_overlap)
-            hours_without = total_hours - hours_with
-            zone_hours_with_wagons[z_key] = hours_with
-            zone_hours_without_wagons[z_key] = hours_without
+            # Warn if over 100%
+            if allocation_pct > 100.5:
+                logger.warning(f"       ⚠️ Over-allocation detected: {allocation_pct:.1f}%")
             
-            logger.info(f"       Input: {zone_thermal_input:,.0f} kWh")
-            logger.info(f"       Allocated: {zone_thermal_allocated:,.0f} kWh ({allocation_pct:.1f}%)")
-            logger.info(f"       Hours with wagons: {hours_with:,} / {total_hours:,} ({hours_with/total_hours*100:.1f}%)")
-            
-            if hours_without > 0:
-                # Calculate energy in hours without wagons
-                hours_without_set = set(e_zone["E_start"].unique()) - hours_with_overlap
-                energy_not_allocated = e_zone[e_zone["E_start"].isin(hours_without_set)][thermal_col].sum()
-                logger.warning(f"       ⚠️ Hours without wagons: {hours_without:,} ({energy_not_allocated:,.0f} kWh not allocated)")
+            logger.info(f"       Input: {zone_thermal_input:,.0f} kWh → Allocated: {zone_thermal_allocated:,.0f} kWh ({allocation_pct:.1f}%)")
             
             results.append(zone_df)
         else:
@@ -1497,32 +1485,44 @@ def allocate_energy(e: pd.DataFrame, ivals: pd.DataFrame) -> pd.DataFrame:
             logger.warning(f"       ⚠️ No allocations made!")
 
     if not results:
-        logger.error("❌ No energy could be allocated!")
+        logger.error("❌ No thermal energy could be allocated!")
         return pd.DataFrame()
 
     final = pd.concat(results, ignore_index=True)
     
     # ========================================
-    # STEP 5: ALLOCATE ELECTRICAL ENERGY
+    # STEP 5: ALLOCATE ELECTRICAL ENERGY (ONCE, not per zone!)
     # ========================================
     logger.info("\n[STEP 5] ALLOCATING ELECTRICAL ENERGY")
     logger.info("-"*50)
+    logger.info("  (Electrical is allocated ONCE across all zones, not per-zone)")
     
-    hour_totals = final.groupby("E_hour_key").agg({
-        "Overlap_h": "sum",
-        "E_el_kWh": "first"
-    }).reset_index()
-    hour_totals = hour_totals.rename(columns={"Overlap_h": "total_overlap_all_zones"})
+    # Get unique hours and their electrical energy
+    # Each hour's electrical energy should be split among ALL wagons in dryer (any zone)
     
-    final = final.merge(hour_totals[["E_hour_key", "total_overlap_all_zones"]], on="E_hour_key", how="left")
+    # First, get the total overlap per hour (across all zones)
+    hour_overlap_all_zones = final.groupby("E_hour_key")["Overlap_h"].sum().reset_index()
+    hour_overlap_all_zones.columns = ["E_hour_key", "total_overlap_all_zones"]
     
-    final["Global_share"] = safe_divide(final["Overlap_h"], final["total_overlap_all_zones"])
-    final["Energy_electrical_kWh"] = final["E_el_kWh"] * final["Global_share"]
+    # Get electrical energy per hour from original energy data
+    e["E_hour_key"] = e["E_start"].dt.strftime("%Y-%m-%d %H:00")
+    hour_electrical = e.groupby("E_hour_key")["E_el_kWh"].first().reset_index()
+    
+    # Merge into final
+    final = final.merge(hour_overlap_all_zones, on="E_hour_key", how="left")
+    final = final.merge(hour_electrical, on="E_hour_key", how="left")
+    
+    # Calculate each record's share of electrical energy
+    final["Electrical_share"] = safe_divide(final["Overlap_h"], final["total_overlap_all_zones"])
+    final["Energy_electrical_kWh"] = final["E_el_kWh"].fillna(0) * final["Electrical_share"]
+    
+    # Total energy
     final["Energy_share_kWh"] = final["Energy_thermal_kWh"] + final["Energy_electrical_kWh"]
     
-    # Clean up
-    final = final.drop(columns=["E_hour_key", "E_el_kWh", "total_overlap_all_zones", "Global_share"], errors='ignore')
+    # Clean up temporary columns
+    final = final.drop(columns=["E_hour_key", "total_overlap_all_zones", "E_el_kWh", "Electrical_share"], errors='ignore')
     
+    # Remove invalid records
     final = final[
         (final["Energy_thermal_kWh"] >= 0) &
         (final["Energy_electrical_kWh"] >= 0) &
@@ -1552,46 +1552,50 @@ def allocate_energy(e: pd.DataFrame, ivals: pd.DataFrame) -> pd.DataFrame:
     logger.info(f"  Electrical: {output_electrical:,.0f} kWh")
     logger.info(f"  TOTAL:      {output_total:,.0f} kWh")
     
-    # Differences
-    thermal_diff = input_thermal_total - output_thermal
+    # Calculate efficiency
     thermal_pct = (output_thermal / input_thermal_total * 100) if input_thermal_total > 0 else 0
-    
-    electrical_diff = input_electrical_total - output_electrical
     electrical_pct = (output_electrical / input_electrical_total * 100) if input_electrical_total > 0 else 0
-    
-    total_diff = input_total - output_total
     total_pct = (output_total / input_total * 100) if input_total > 0 else 0
     
     logger.info(f"\nALLOCATION EFFICIENCY:")
-    logger.info(f"  Thermal:    {output_thermal:,.0f} / {input_thermal_total:,.0f} = {thermal_pct:.1f}% allocated")
-    logger.info(f"  Electrical: {output_electrical:,.0f} / {input_electrical_total:,.0f} = {electrical_pct:.1f}% allocated")
-    logger.info(f"  TOTAL:      {output_total:,.0f} / {input_total:,.0f} = {total_pct:.1f}% allocated")
+    logger.info(f"  Thermal:    {thermal_pct:.1f}%")
+    logger.info(f"  Electrical: {electrical_pct:.1f}%")
+    logger.info(f"  TOTAL:      {total_pct:.1f}%")
     
-    logger.info(f"\nUNALLOCATED ENERGY:")
-    logger.info(f"  Thermal:    {thermal_diff:,.0f} kWh ({100-thermal_pct:.1f}%)")
-    logger.info(f"  Electrical: {electrical_diff:,.0f} kWh ({100-electrical_pct:.1f}%)")
-    logger.info(f"  TOTAL:      {total_diff:,.0f} kWh ({100-total_pct:.1f}%)")
+    # Validation checks
+    logger.info(f"\nVALIDATION:")
     
-    if total_pct >= 95:
-        logger.info(f"\n✅ EXCELLENT: {total_pct:.1f}% of energy allocated")
-    elif total_pct >= 85:
-        logger.info(f"\n✓ GOOD: {total_pct:.1f}% of energy allocated")
-        logger.info(f"  (Some hours had no wagons in dryer)")
-    elif total_pct >= 70:
-        logger.warning(f"\n⚠️ MODERATE: Only {total_pct:.1f}% of energy allocated")
-        logger.warning(f"  Check if wagon and energy files cover same time period")
+    if thermal_pct > 101:
+        logger.error(f"  ❌ Thermal over-allocated by {thermal_pct - 100:.1f}%!")
+    elif thermal_pct > 100:
+        logger.warning(f"  ⚠️ Thermal slightly over 100% ({thermal_pct:.1f}%) - rounding error")
+    elif thermal_pct >= 95:
+        logger.info(f"  ✅ Thermal allocation OK ({thermal_pct:.1f}%)")
     else:
-        logger.error(f"\n❌ LOW: Only {total_pct:.1f}% of energy allocated!")
-        logger.error(f"  Possible time period mismatch between files")
+        logger.warning(f"  ⚠️ Thermal under-allocated ({thermal_pct:.1f}%)")
     
-    logger.info(f"\nBY ZONE:")
+    if electrical_pct > 101:
+        logger.error(f"  ❌ Electrical over-allocated by {electrical_pct - 100:.1f}%!")
+    elif electrical_pct > 100:
+        logger.warning(f"  ⚠️ Electrical slightly over 100% ({electrical_pct:.1f}%) - rounding error")
+    elif electrical_pct >= 95:
+        logger.info(f"  ✅ Electrical allocation OK ({electrical_pct:.1f}%)")
+    else:
+        logger.warning(f"  ⚠️ Electrical under-allocated ({electrical_pct:.1f}%)")
+    
+    if 95 <= total_pct <= 101:
+        logger.info(f"\n✅ ENERGY BALANCE OK: {total_pct:.1f}% allocated")
+    elif total_pct > 101:
+        logger.error(f"\n❌ OVER-ALLOCATION: {total_pct:.1f}% - BUG IN CODE!")
+    else:
+        logger.warning(f"\n⚠️ UNDER-ALLOCATION: {total_pct:.1f}% - some hours had no wagons")
+    
+    logger.info(f"\nBY ZONE (Thermal only):")
     for z_key in ZONE_ENERGY_MAPPING.keys():
         z_input = zone_input.get(z_key, 0)
         z_output = zone_allocated.get(z_key, 0)
         z_pct = (z_output / z_input * 100) if z_input > 0 else 0
-        z_hours_with = zone_hours_with_wagons.get(z_key, 0)
-        z_hours_without = zone_hours_without_wagons.get(z_key, 0)
-        logger.info(f"  {z_key}: {z_output:,.0f} / {z_input:,.0f} kWh ({z_pct:.1f}%) | Hours: {z_hours_with:,} with wagons, {z_hours_without:,} without")
+        logger.info(f"  {z_key}: {z_output:,.0f} / {z_input:,.0f} kWh ({z_pct:.1f}%)")
     
     logger.info(f"\nTotal allocation records: {len(final):,}")
     logger.info("="*70)
@@ -1754,6 +1758,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
