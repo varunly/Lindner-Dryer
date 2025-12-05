@@ -1625,9 +1625,7 @@ Verification:
                     st.metric("Total Volume", f"{filtered_volume:,.0f} m³")
                 with col_m3:
                     st.metric("Total Water", f"{filtered_water:,.0f} kg")
-                with col_m4:
-                    filtered_kwh_kg = safe_divide(filtered_energy, filtered_water)
-                    st.metric("kWh/kg", f"{filtered_kwh_kg:.3f}")
+                
 
                 # Monthly Charts
                 col_o1, col_o2 = st.columns(2)
@@ -2350,6 +2348,7 @@ Verification:
         st.error(f"❌ Display error: {e}")
         with st.expander("🔍 View Error Details"):
             st.exception(e)
+
 
 
 
