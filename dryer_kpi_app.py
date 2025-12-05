@@ -528,9 +528,7 @@ def run_analysis(energy_path: str, wagon_path: str, products_filter, month_filte
         # energy_electrical_raw was captured right after parse_energy(), before overlap filter
         alloc = allocate_energy(e, ivals, full_electrical_kwh=energy_electrical_raw)
         
-        # DEBUG: Verify electrical is correct
-        alloc_electrical = alloc["Energy_electrical_kWh"].sum()
-        logger.info(f"DEBUG: Allocated electrical = {alloc_electrical:,.0f} kWh (expected {energy_electrical_raw:,.0f})")
+      
         if alloc.empty:
             raise ValueError("Energy allocation result is empty.")
         
@@ -2352,6 +2350,7 @@ Verification:
         st.error(f"❌ Display error: {e}")
         with st.expander("🔍 View Error Details"):
             st.exception(e)
+
 
 
 
