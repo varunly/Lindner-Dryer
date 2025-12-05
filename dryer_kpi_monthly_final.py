@@ -382,6 +382,36 @@ PRODUCT_SPECIFICATIONS = {
         "water_per_plate_kg": 7.10,
         "interpolated": True,
     },
+    "Y40": {
+        "product_type": "Y",
+        "final_thickness_mm": 40,
+        "press_measurement_mm": 11,
+        "pressed_thickness_mm": 51,
+        "edge_length_mm": 602,
+        "volume_m3": 0.0185,
+        "suspension_kg": 330,
+        "slope": -0.157,
+        "intercept": 200.0,
+        "formula": "-0.157x + 200.0 (interpolated Y38-Y44)",
+        "water_per_mm_g": 148,
+        "water_per_plate_kg": 7.55,
+        "interpolated": True,
+    },
+    "Y42": {
+        "product_type": "Y",
+        "final_thickness_mm": 42,
+        "press_measurement_mm": 11,
+        "pressed_thickness_mm": 53,
+        "edge_length_mm": 602,
+        "volume_m3": 0.0192,
+        "suspension_kg": 330,
+        "slope": -0.157,
+        "intercept": 200.0,
+        "formula": "-0.157x + 200.0 (interpolated Y38-Y44)",
+        "water_per_mm_g": 148,
+        "water_per_plate_kg": 7.84,
+        "interpolated": True,
+        },
     "Y44": {
         "product_type": "Y",
         "final_thickness_mm": 44,
@@ -1761,5 +1791,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
