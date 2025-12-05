@@ -933,7 +933,6 @@ if st.session_state.analysis_complete and st.session_state.results:
 
             with c1:
                 st.markdown(create_kpi_card("Total Wagon Rows", total_wagons, ""), unsafe_allow_html=True)
-                st.caption(f"Unique wagons: {unique_wagon_numbers:,}")
             with c2:
                 st.markdown(create_kpi_card("Total Volume", total_volume, "m³"), unsafe_allow_html=True)
             with c3:
@@ -2348,6 +2347,7 @@ Verification:
         st.error(f"❌ Display error: {e}")
         with st.expander("🔍 View Error Details"):
             st.exception(e)
+
 
 
 
