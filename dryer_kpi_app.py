@@ -150,9 +150,13 @@ with st.sidebar:
     st.markdown('</div>', unsafe_allow_html=True)
 
     products = st.multiselect(
-        "🧱 Product(s):",
-        ["L28", "L30", "L32", "L34", "L36", "L38", "L40", "L42", "L44", "N40", "N44", "Y44"],
-        default=["L28", "L30", "L32", "L34", "L36", "L38", "L40", "L42", "L44", "N40", "N44", "Y44"],
+    "🧱 Product(s):",
+    ["L20", "L24", "L28", "L30", "L32", "L34", "L36", "L37", "L38", "L40", "L42", "L44", 
+     "N24", "N30", "N34", "N36", "N38", "N40", "N42", "N44", 
+     "Y30", "Y34", "Y38", "Y44"],
+    default=["L28", "L30", "L32", "L34", "L36", "L38", "L40", "L42", "L44", 
+             "N24", "N30", "N34", "N36", "N38", "N40", "N42", "N44", 
+             "Y30", "Y34", "Y38", "Y44"],
     )
 
     month = st.number_input(
@@ -2483,6 +2487,7 @@ Verification:
         st.error(f"❌ Display error: {e}")
         with st.expander("🔍 View Error Details"):
             st.exception(e)
+
 
 
 
