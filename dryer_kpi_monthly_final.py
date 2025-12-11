@@ -1040,10 +1040,95 @@ def parse_wagon(df: pd.DataFrame, trockner: str = None) -> pd.DataFrame:
         logger.warning(f"⚠️ Expected ~3692 rows for Trockner A, got {total_rows}")
     if trockner == "B" and total_rows < 3500:
         logger.warning(f"⚠️ Expected ~3691 rows for Trockner B, got {total_rows}")
+        # =============================================
+    # NEW: Add zone duration in hours for display
+    # =============================================
+    for z in CONFIG["zones_seq"]:
+        dur_col = f"{z}_dur"
+        hours_col = f"{z}_dur_hours"
+        if dur_col in df.columns:
+            df[hours_col] = df[dur_col].dt.total_seconds() / 3600
+        else:
+            df[hours_col] = np.nan
+    
+    # Calculate total residence time
+    if "Entnahme" in df.columns and "t0" in df.columns:
+        df["Total_residence_hours"] = (df["Entnahme"] - df["t0"]).dt.total_seconds() / 3600
+    else:
+        df["Total_residence_hours"] = np.nan
+    
+    # Add week/year based on Z2 entry (for energy calculations)
+    if "Z2_in" in df.columns and df["Z2_in"].notna().any():
+        df["Z2_entry_time"] = df["Z2_in"]
+        df["Week_Z2"] = df["Z2_in"].dt.isocalendar().week
+        df["Year_Z2"] = df["Z2_in"].dt.year
+    else:
+        df["Z2_entry_time"] = df["t0"]
+        df["Week_Z2"] = df["t0"].dt.isocalendar().week
+        df["Year_Z2"] = df["t0"].dt.year
+    
+    logger.info(f"Final result: {len(df)} rows, {df['m3'].sum():.2f} m³")
     
     return df
+    
 
-
+def compute_zone_duration_stats(wagons: pd.DataFrame) -> pd.DataFrame:
+    """
+    Compute statistics for time spent in each zone.
+    
+    Returns DataFrame with average, min, max duration per zone and product.
+    """
+    logger.info("Computing zone duration statistics...")
+    
+    zone_cols = ["Z1_dur_hours", "Z2_dur_hours", "Z3_dur_hours", "Z4_dur_hours", "Z5_dur_hours"]
+    available_cols = [c for c in zone_cols if c in wagons.columns]
+    
+    if not available_cols:
+        logger.warning("No zone duration columns found!")
+        return pd.DataFrame()
+    
+    # Overall stats per zone
+    zone_stats = []
+    
+    for col in available_cols:
+        zone_name = col.replace("_dur_hours", "")
+        valid_data = wagons[col].dropna()
+        
+        if len(valid_data) > 0:
+            zone_stats.append({
+                "Zone": zone_name,
+                "Avg_Hours": valid_data.mean(),
+                "Min_Hours": valid_data.min(),
+                "Max_Hours": valid_data.max(),
+                "Std_Hours": valid_data.std(),
+                "Count": len(valid_data),
+            })
+    
+    overall_stats = pd.DataFrame(zone_stats)
+    
+    # Stats per product
+    product_zone_stats = []
+    
+    for product in wagons["Produkt"].unique():
+        prod_data = wagons[wagons["Produkt"] == product]
+        
+        for col in available_cols:
+            zone_name = col.replace("_dur_hours", "")
+            valid_data = prod_data[col].dropna()
+            
+            if len(valid_data) > 0:
+                product_zone_stats.append({
+                    "Produkt": product,
+                    "Zone": zone_name,
+                    "Avg_Hours": valid_data.mean(),
+                    "Min_Hours": valid_data.min(),
+                    "Max_Hours": valid_data.max(),
+                    "Count": len(valid_data),
+                })
+    
+    product_stats = pd.DataFrame(product_zone_stats)
+    
+    return overall_stats, product_stats
 def diagnose_wagon_file(df: pd.DataFrame, trockner: str = None) -> dict:
     """
     Diagnostic function to trace exactly where rows are lost.
@@ -1550,6 +1635,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
