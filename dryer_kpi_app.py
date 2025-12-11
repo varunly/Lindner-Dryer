@@ -539,6 +539,41 @@ def run_analysis(energy_path: str, wagon_path: str, products_filter, month_filte
                 st.write(f"**Electrical allocated:** {alloc['Energy_electrical_kWh'].sum():,.0f} kWh")
                 st.write(f"**Total allocated:** {alloc['Energy_share_kWh'].sum():,.0f} kWh")
 
+                # ===== COMPUTE ZONE DURATION STATS =====
+        status.text("🔄 Computing zone duration statistics...")
+        progress.progress(85)
+        
+        # Import the function if not already imported
+        try:
+            from dryer_kpi_monthly_final import compute_zone_duration_stats
+            zone_overall_stats, zone_product_stats = compute_zone_duration_stats(w)
+        except:
+            zone_overall_stats = pd.DataFrame()
+            zone_product_stats = pd.DataFrame()
+        
+        # ===== COMPUTE WEEKLY ENERGY BY Z2 ENTRY =====
+        # Weekly energy should be based on when wagon enters Z2 (where energy consumption starts)
+        if "Z2_in" in w.columns:
+            w["Week_Energy"] = w["Z2_in"].dt.isocalendar().week
+            w["Year_Energy"] = w["Z2_in"].dt.year
+        else:
+            w["Week_Energy"] = w["t0"].dt.isocalendar().week
+            w["Year_Energy"] = w["t0"].dt.year
+        
+        # Create weekly energy summary from allocation data
+        if "Z2_in" in ivals.columns if hasattr(ivals, 'columns') else False:
+            # Use Z2 entry for weekly grouping
+            pass
+        
+        # Weekly aggregation based on Z2 entry
+        weekly_wagon_summary = w.groupby(["Year_Energy", "Week_Energy"], as_index=False).agg({
+            "m3": "sum",
+            "WG_Nr": "count"
+        }).rename(columns={"WG_Nr": "Wagon_Count", "m3": "Volume_m3"})
+        weekly_wagon_summary["Week_Label"] = (
+            weekly_wagon_summary["Year_Energy"].astype(str) + "-W" +
+            weekly_wagon_summary["Week_Energy"].astype(str).str.zfill(2)
+        )
         # ===== AGGREGATE KPIs =====
         status.text("🔄 Aggregating KPIs...")
         progress.progress(90)
@@ -689,6 +724,12 @@ def run_analysis(energy_path: str, wagon_path: str, products_filter, month_filte
             # Filter settings
             "products_filter_applied": products_filter,
             "month_filter_applied": month_filter,
+            # Zone duration statistics (NEW)
+            "zone_overall_stats": zone_overall_stats,
+            "zone_product_stats": zone_product_stats,
+            
+            # Weekly data by Z2 entry (NEW)
+            "weekly_wagon_summary": weekly_wagon_summary,
         }
 
     finally:
@@ -1722,7 +1763,64 @@ Verification:
                     st.info(f"📊 **Weekly Statistics:** Average = **{avg_weekly:,.0f} kWh/week** | Peak = **{max_weekly:,.0f} kWh**")
                 else:
                     st.info("📅 Weekly energy data not available for the selected period")
+                st.markdown(
+                '<div class="section-header">📊 Monthly & Weekly KPI Trends</div>',
+                unsafe_allow_html=True
+                    )
 
+                # ===== NEW: TIMELINE FILTER =====
+                st.subheader("📅 Timeline Filter")
+                
+                # Get date range from data
+                min_date = results.get("overlap_start", wagons_df["t0"].min())
+                max_date = results.get("overlap_end", wagons_df["t0"].max())
+                
+                col_date1, col_date2, col_date3 = st.columns([2, 2, 1])
+                
+                with col_date1:
+                    start_date = st.date_input(
+                        "Start Date",
+                        value=pd.to_datetime(min_date).date(),
+                        min_value=pd.to_datetime(min_date).date(),
+                        max_value=pd.to_datetime(max_date).date(),
+                        key="trend_start_date"
+                    )
+                
+                with col_date2:
+                    end_date = st.date_input(
+                        "End Date",
+                        value=pd.to_datetime(max_date).date(),
+                        min_value=pd.to_datetime(min_date).date(),
+                        max_value=pd.to_datetime(max_date).date(),
+                        key="trend_end_date"
+                    )
+                
+                with col_date3:
+                    apply_date_filter = st.button("Apply Filter", key="apply_date_filter")
+                
+                # Convert to datetime for filtering
+                start_datetime = pd.to_datetime(start_date)
+                end_datetime = pd.to_datetime(end_date) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
+                
+                # Filter summary data by date range
+                # We need to filter based on the original wagon data
+                if "t0" in wagons_df.columns:
+                    date_mask = (wagons_df["t0"] >= start_datetime) & (wagons_df["t0"] <= end_datetime)
+                    wagons_filtered = wagons_df[date_mask].copy()
+                else:
+                    wagons_filtered = wagons_df.copy()
+                
+                # Get months in the filtered range
+                months_in_range = wagons_filtered["Month"].unique().tolist() if not wagons_filtered.empty else []
+                
+                # Filter summary to only include months in range
+                summary_filtered = summary[summary["Month"].isin(months_in_range)].copy()
+                
+                # Show selected period info
+                days_selected = (end_datetime - start_datetime).days + 1
+                st.info(f"📅 **Selected Period:** {start_date} to {end_date} ({days_selected} days) | "
+                       f"**Wagons in period:** {len(wagons_filtered):,} | "
+                       f"**Volume:** {wagons_filtered['m3'].sum():,.2f} m³")
                 # Monthly KPI Charts
                 col_o3, col_o4 = st.columns(2)
                 
@@ -2347,6 +2445,7 @@ Verification:
         st.error(f"❌ Display error: {e}")
         with st.expander("🔍 View Error Details"):
             st.exception(e)
+
 
 
 
