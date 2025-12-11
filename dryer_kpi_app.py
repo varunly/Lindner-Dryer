@@ -19,6 +19,7 @@ try:
         allocate_energy,
         add_water_kpis,
         compute_product_wagon_stats,
+        compute_zone_duration_stats,  # ← ADD THIS LINE
         predict_production_energy,
         calculate_water_per_m3_formula,
         get_product_water_curve,
@@ -528,6 +529,24 @@ def run_analysis(energy_path: str, wagon_path: str, products_filter, month_filte
         # energy_electrical_raw was captured right after parse_energy(), before overlap filter
         alloc = allocate_energy(e, ivals, full_electrical_kwh=energy_electrical_raw)
         
+        # ===== COMPUTE ZONE DURATION STATS =====
+        status.text("🔄 Computing zone duration statistics...")
+        progress.progress(85)
+        
+        try:
+            zone_overall_stats, zone_product_stats = compute_zone_duration_stats(w)
+        except Exception as ex:
+            zone_overall_stats = pd.DataFrame()
+            zone_product_stats = pd.DataFrame()
+            print(f"Zone stats error: {ex}")
+        
+        # Add week/year based on Z2 entry for weekly calculations
+        if "Z2_in" in w.columns and w["Z2_in"].notna().any():
+            w["Week_Energy"] = w["Z2_in"].dt.isocalendar().week
+            w["Year_Energy"] = w["Z2_in"].dt.year
+        else:
+            w["Week_Energy"] = w["t0"].dt.isocalendar().week
+            w["Year_Energy"] = w["t0"].dt.year
       
         if alloc.empty:
             raise ValueError("Energy allocation result is empty.")
@@ -539,41 +558,6 @@ def run_analysis(energy_path: str, wagon_path: str, products_filter, month_filte
                 st.write(f"**Electrical allocated:** {alloc['Energy_electrical_kWh'].sum():,.0f} kWh")
                 st.write(f"**Total allocated:** {alloc['Energy_share_kWh'].sum():,.0f} kWh")
 
-                # ===== COMPUTE ZONE DURATION STATS =====
-        status.text("🔄 Computing zone duration statistics...")
-        progress.progress(85)
-        
-        # Import the function if not already imported
-        try:
-            from dryer_kpi_monthly_final import compute_zone_duration_stats
-            zone_overall_stats, zone_product_stats = compute_zone_duration_stats(w)
-        except:
-            zone_overall_stats = pd.DataFrame()
-            zone_product_stats = pd.DataFrame()
-        
-        # ===== COMPUTE WEEKLY ENERGY BY Z2 ENTRY =====
-        # Weekly energy should be based on when wagon enters Z2 (where energy consumption starts)
-        if "Z2_in" in w.columns:
-            w["Week_Energy"] = w["Z2_in"].dt.isocalendar().week
-            w["Year_Energy"] = w["Z2_in"].dt.year
-        else:
-            w["Week_Energy"] = w["t0"].dt.isocalendar().week
-            w["Year_Energy"] = w["t0"].dt.year
-        
-        # Create weekly energy summary from allocation data
-        if "Z2_in" in ivals.columns if hasattr(ivals, 'columns') else False:
-            # Use Z2 entry for weekly grouping
-            pass
-        
-        # Weekly aggregation based on Z2 entry
-        weekly_wagon_summary = w.groupby(["Year_Energy", "Week_Energy"], as_index=False).agg({
-            "m3": "sum",
-            "WG_Nr": "count"
-        }).rename(columns={"WG_Nr": "Wagon_Count", "m3": "Volume_m3"})
-        weekly_wagon_summary["Week_Label"] = (
-            weekly_wagon_summary["Year_Energy"].astype(str) + "-W" +
-            weekly_wagon_summary["Week_Energy"].astype(str).str.zfill(2)
-        )
         # ===== AGGREGATE KPIs =====
         status.text("🔄 Aggregating KPIs...")
         progress.progress(90)
@@ -724,12 +708,10 @@ def run_analysis(energy_path: str, wagon_path: str, products_filter, month_filte
             # Filter settings
             "products_filter_applied": products_filter,
             "month_filter_applied": month_filter,
+            
             # Zone duration statistics (NEW)
             "zone_overall_stats": zone_overall_stats,
             "zone_product_stats": zone_product_stats,
-            
-            # Weekly data by Z2 entry (NEW)
-            "weekly_wagon_summary": weekly_wagon_summary,
         }
 
     finally:
@@ -896,7 +878,7 @@ if st.session_state.analysis_complete and st.session_state.results:
             unique_wagon_numbers = wagons_df["WG_Nr"].nunique()
 
             # ===== ENERGY TOTALS =====
-# Use values from allocation results to ensure correctness
+            # Use values from allocation results to ensure correctness
             total_thermal = float(yearly["Energy_thermal_kWh"].sum())
             total_electrical = float(yearly["Energy_electrical_kWh"].sum())
             total_energy = float(yearly["Energy_kWh"].sum())
@@ -1549,466 +1531,514 @@ Verification:
             })
             st.dataframe(zone_display, use_container_width=True, hide_index=True)
 
+            # ===== ZONE DURATION STATISTICS =====
+            st.markdown('<div class="section-header">⏱️ Time in Each Zone</div>', unsafe_allow_html=True)
+            
+            zone_overall_stats = results.get("zone_overall_stats", pd.DataFrame())
+            zone_product_stats = results.get("zone_product_stats", pd.DataFrame())
+            
+            if zone_overall_stats is not None and not zone_overall_stats.empty:
+                st.subheader("📊 Average Time in Each Zone")
+                
+                col_zd1, col_zd2 = st.columns(2)
+                
+                with col_zd1:
+                    fig_zone_dur = px.bar(
+                        zone_overall_stats,
+                        x="Zone",
+                        y="Avg_Hours",
+                        title="Average Time in Each Zone (Hours)",
+                        text_auto='.1f',
+                        color="Zone",
+                        color_discrete_sequence=px.colors.qualitative.Set2
+                    )
+                    fig_zone_dur.update_traces(textposition='outside')
+                    fig_zone_dur.update_layout(height=350, plot_bgcolor="white", showlegend=False)
+                    st.plotly_chart(fig_zone_dur, use_container_width=True)
+                
+                with col_zd2:
+                    zone_dur_display = zone_overall_stats.copy()
+                    zone_dur_display["Avg_Hours"] = zone_dur_display["Avg_Hours"].round(2)
+                    zone_dur_display["Min_Hours"] = zone_dur_display["Min_Hours"].round(2)
+                    zone_dur_display["Max_Hours"] = zone_dur_display["Max_Hours"].round(2)
+                    zone_dur_display["Std_Hours"] = zone_dur_display["Std_Hours"].round(2)
+                    
+                    zone_dur_display = zone_dur_display.rename(columns={
+                        "Avg_Hours": "Avg (h)",
+                        "Min_Hours": "Min (h)",
+                        "Max_Hours": "Max (h)",
+                        "Std_Hours": "Std Dev (h)",
+                        "Count": "Samples"
+                    })
+                    
+                    st.dataframe(zone_dur_display, use_container_width=True, hide_index=True)
+                    
+                    total_avg = zone_overall_stats["Avg_Hours"].sum()
+                    st.metric("Total Avg Residence Time", f"{total_avg:.1f} hours ({total_avg/24:.1f} days)")
+                
+                # Zone duration by product
+                if zone_product_stats is not None and not zone_product_stats.empty:
+                    with st.expander("📦 Zone Duration by Product"):
+                        pivot_zone_dur = zone_product_stats.pivot_table(
+                            index="Produkt",
+                            columns="Zone",
+                            values="Avg_Hours",
+                            aggfunc="mean"
+                        ).round(2)
+                        
+                        pivot_zone_dur["Total"] = pivot_zone_dur.sum(axis=1).round(2)
+                        
+                        st.dataframe(pivot_zone_dur, use_container_width=True)
+                        
+                        fig_heatmap = px.imshow(
+                            pivot_zone_dur.drop(columns=["Total"], errors="ignore"),
+                            title="Average Zone Duration by Product (Hours)",
+                            labels=dict(x="Zone", y="Product", color="Hours"),
+                            color_continuous_scale="YlOrRd",
+                            aspect="auto"
+                        )
+                        fig_heatmap.update_layout(height=400)
+                        st.plotly_chart(fig_heatmap, use_container_width=True)
+            else:
+                st.info("⏱️ Zone duration data not available.")
+
             # ===== 3. MONTHLY & WEEKLY TRENDS =====
             st.markdown(
                 '<div class="section-header">📊 Monthly & Weekly KPI Trends</div>',
                 unsafe_allow_html=True
             )
 
-            available_products = sorted(summary["Produkt"].unique().tolist())
+            # ===== TIMELINE FILTER =====
+            st.subheader("📅 Timeline Filter")
             
-            st.subheader("🎯 Filter by Product")
-            col_filter1, col_filter2 = st.columns([3, 1])
-            
-            with col_filter1:
-                selected_products_trends = st.multiselect(
-                    "Select products to display:",
-                    options=available_products,
-                    default=available_products,
-                    key="trends_product_filter"
-                )
-            
-            with col_filter2:
-                select_all = st.button("Select All", key="select_all_trends")
-                clear_all = st.button("Clear All", key="clear")     
-            if select_all:
-                selected_products_trends = available_products
-            if clear_all:
-                selected_products_trends = []
-
-            if not selected_products_trends:
-                st.warning("⚠️ Please select at least one product to display trends.")
+            # Get date range from data
+            if "t0" in wagons_df.columns:
+                min_date = wagons_df["t0"].min()
+                max_date = wagons_df["t0"].max()
             else:
-                summary_filtered = summary[summary["Produkt"].isin(selected_products_trends)]
+                min_date = pd.Timestamp.now() - pd.Timedelta(days=365)
+                max_date = pd.Timestamp.now()
+            
+            col_date1, col_date2 = st.columns(2)
+            
+            with col_date1:
+                start_date = st.date_input(
+                    "Start Date",
+                    value=pd.to_datetime(min_date).date(),
+                    min_value=pd.to_datetime(min_date).date(),
+                    max_value=pd.to_datetime(max_date).date(),
+                    key="trend_start_date"
+                )
+            
+            with col_date2:
+                end_date = st.date_input(
+                    "End Date",
+                    value=pd.to_datetime(max_date).date(),
+                    min_value=pd.to_datetime(min_date).date(),
+                    max_value=pd.to_datetime(max_date).date(),
+                    key="trend_end_date"
+                )
+            
+            # Convert to datetime
+            start_datetime = pd.to_datetime(start_date)
+            end_datetime = pd.to_datetime(end_date) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
+            
+            # Filter data by date range
+            date_mask = (wagons_df["t0"] >= start_datetime) & (wagons_df["t0"] <= end_datetime)
+            wagons_date_filtered = wagons_df[date_mask].copy()
+            
+            # Get months in the filtered range
+            months_in_range = wagons_date_filtered["Month"].unique().tolist() if not wagons_date_filtered.empty else []
+            
+            # Filter summary
+            summary_date_filtered = summary[summary["Month"].isin(months_in_range)].copy()
+            
+            # Show period info
+            days_selected = (end_datetime - start_datetime).days + 1
+            st.info(f"📅 **Selected Period:** {start_date} to {end_date} ({days_selected} days) | "
+                   f"**Wagons:** {len(wagons_date_filtered):,} | "
+                   f"**Volume:** {wagons_date_filtered['m3'].sum():,.2f} m³")
+
+            # Product filter
+            available_products = sorted(summary_date_filtered["Produkt"].unique().tolist())
+            
+            if not available_products:
+                st.warning("⚠️ No data available for the selected date range.")
+            else:
+                st.subheader("🎯 Filter by Product")
+                col_filter1, col_filter2 = st.columns([3, 1])
                 
-                st.info(f"📊 Showing data for **{len(selected_products_trends)}** product(s): {', '.join(selected_products_trends)}")
-
-                # Monthly by Product
-                monthly_product = summary_filtered.groupby(["Month", "Produkt"], as_index=False).agg({
-                    "Energy_thermal_kWh": "sum",
-                    "Energy_electrical_kWh": "sum",
-                    "Energy_kWh": "sum",
-                    "Volume_m3": "sum",
-                    "Water_kg": "sum",
-                })
-                monthly_product["kWh_per_m3"] = safe_divide(
-                    monthly_product["Energy_kWh"], monthly_product["Volume_m3"]
-                )
-                monthly_product["kWh_per_kg"] = safe_divide(
-                    monthly_product["Energy_kWh"], monthly_product["Water_kg"]
-                )
-                monthly_product["kWh_thermal_per_m3"] = safe_divide(
-                    monthly_product["Energy_thermal_kWh"], monthly_product["Volume_m3"]
-                )
-
-                # Monthly by Zone
-                monthly_zone = summary_filtered.groupby(["Month", "Zone"], as_index=False).agg({
-                    "Energy_thermal_kWh": "sum",
-                    "Energy_electrical_kWh": "sum",
-                    "Energy_kWh": "sum",
-                    "Volume_m3": "sum",
-                    "Water_kg": "sum",
-                })
-                monthly_zone["kWh_per_m3"] = safe_divide(
-                    monthly_zone["Energy_kWh"], monthly_zone["Volume_m3"]
-                )
-                monthly_zone["kWh_per_kg"] = safe_divide(
-                    monthly_zone["Energy_kWh"], monthly_zone["Water_kg"]
-                )
-
-                # Monthly Overall
-                monthly_overall = summary_filtered.groupby(["Month"], as_index=False).agg({
-                    "Energy_thermal_kWh": "sum",
-                    "Energy_electrical_kWh": "sum",
-                    "Energy_kWh": "sum",
-                    "Volume_m3": "sum",
-                    "Water_kg": "sum",
-                })
-                monthly_overall["kWh_per_m3"] = safe_divide(
-                    monthly_overall["Energy_kWh"], monthly_overall["Volume_m3"]
-                )
-                monthly_overall["kWh_per_kg"] = safe_divide(
-                    monthly_overall["Energy_kWh"], monthly_overall["Water_kg"]
-                )
-
-                # Weekly data
-                weekly_energy = None
-                if "energy" in results and not results["energy"].empty:
-                    energy_df = results["energy"].copy()
-                    energy_df["Week"] = energy_df["E_start"].dt.isocalendar().week
-                    energy_df["Year"] = energy_df["E_start"].dt.year
-
-                    agg_dict = {"E_thermal_total_kWh": "sum", "E_el_kWh": "sum"}
-                    weekly_energy = energy_df.groupby(["Year", "Week"], as_index=False).agg(agg_dict)
-                    weekly_energy["Total_kWh"] = weekly_energy["E_thermal_total_kWh"] + weekly_energy["E_el_kWh"]
-                    weekly_energy["Week_Label"] = (
-                        weekly_energy["Year"].astype(str) + "-W" +
-                        weekly_energy["Week"].astype(str).str.zfill(2)
+                with col_filter1:
+                    selected_products_trends = st.multiselect(
+                        "Select products to display:",
+                        options=available_products,
+                        default=available_products,
+                        key="trends_product_filter"
                     )
-                    weekly_energy["E_thermal_total_kWh"] = weekly_energy["E_thermal_total_kWh"].clip(lower=0)
-                    weekly_energy["E_el_kWh"] = weekly_energy["E_el_kWh"].clip(lower=0)
-                    weekly_energy["Total_kWh"] = weekly_energy["Total_kWh"].clip(lower=0)
-
-                # Overall Trends
-                st.subheader("📈 Overall Performance Trends")
                 
-                filtered_thermal = monthly_overall["Energy_thermal_kWh"].sum()
-                filtered_electrical = monthly_overall["Energy_electrical_kWh"].sum()
-                filtered_energy = monthly_overall["Energy_kWh"].sum()
-                filtered_volume = monthly_overall["Volume_m3"].sum()
-                filtered_water = monthly_overall["Water_kg"].sum()
-                
-                col_m1, col_m2, col_m3, col_m4 = st.columns(4)
-                with col_m1:
-                    st.metric("Total Energy", f"{filtered_energy:,.0f} kWh")
-                with col_m2:
-                    st.metric("Total Volume", f"{filtered_volume:,.0f} m³")
-                with col_m3:
-                    st.metric("Total Water", f"{filtered_water:,.0f} kg")
-                
+                with col_filter2:
+                    if st.button("Select All", key="select_all_trends"):
+                        selected_products_trends = available_products
+                    if st.button("Clear All", key="clear_all_trends"):
+                        selected_products_trends = []
 
-                # Monthly Charts
-                col_o1, col_o2 = st.columns(2)
-
-                with col_o1:
-                    fig_monthly_energy = go.Figure()
-                    fig_monthly_energy.add_trace(go.Bar(
-                        name='Thermal',
-                        x=monthly_overall["Month"],
-                        y=monthly_overall["Energy_thermal_kWh"],
-                        marker_color='#FF6B6B',
-                        text=[f"{v:,.0f}" for v in monthly_overall["Energy_thermal_kWh"]],
-                        textposition='inside'
-                    ))
-                    fig_monthly_energy.add_trace(go.Bar(
-                        name='Electrical',
-                        x=monthly_overall["Month"],
-                        y=monthly_overall["Energy_electrical_kWh"],
-                        marker_color='#4ECDC4',
-                        text=[f"{v:,.0f}" for v in monthly_overall["Energy_electrical_kWh"]],
-                        textposition='inside'
-                    ))
-                    fig_monthly_energy.update_layout(
-                        title="Monthly Energy Consumption (kWh)",
-                        xaxis_title="Month",
-                        yaxis_title="Energy (kWh)",
-                        barmode='stack',
-                        height=350,
-                        plot_bgcolor="white"
-                    )
-                    st.plotly_chart(fig_monthly_energy, use_container_width=True)
-
-                with col_o2:
-                    fig_monthly_volume = px.bar(
-                        monthly_overall,
-                        x="Month",
-                        y="Volume_m3",
-                        title="Monthly Production Volume (m³)",
-                        labels={"Volume_m3": "Volume (m³)", "Month": "Month"},
-                        text_auto='.0f'
-                    )
-                    fig_monthly_volume.update_traces(marker_color='#26de81', textposition='outside')
-                    fig_monthly_volume.update_layout(height=350, plot_bgcolor="white", showlegend=False)
-                    st.plotly_chart(fig_monthly_volume, use_container_width=True)
-
-                # Weekly Trends
-                st.subheader("📅 Weekly Energy Trends")
-                
-                if weekly_energy is not None and not weekly_energy.empty:
-                    col_w1, col_w2 = st.columns(2)
-
-                    with col_w1:
-                        fig_weekly_total = go.Figure()
-                        fig_weekly_total.add_trace(go.Bar(
-                            name='Thermal',
-                            x=weekly_energy["Week_Label"],
-                            y=weekly_energy["E_thermal_total_kWh"],
-                            marker_color='#FF6B6B'
-                        ))
-                        fig_weekly_total.add_trace(go.Bar(
-                            name='Electrical',
-                            x=weekly_energy["Week_Label"],
-                            y=weekly_energy["E_el_kWh"],
-                            marker_color='#4ECDC4'
-                        ))
-                        fig_weekly_total.update_layout(
-                            title="Weekly Energy Consumption (kWh)",
-                            xaxis_title="Week",
-                            yaxis_title="Energy (kWh)",
-                            barmode='stack',
-                            height=350,
-                            plot_bgcolor="white",
-                            xaxis_tickangle=-45
-                        )
-                        st.plotly_chart(fig_weekly_total, use_container_width=True)
-
-                    with col_w2:
-                        fig_weekly_trend = px.line(
-                            weekly_energy,
-                            x="Week_Label",
-                            y="Total_kWh",
-                            markers=True,
-                            title="Weekly Total Energy Trend (kWh)"
-                        )
-                        fig_weekly_trend.update_traces(line_color='#667eea', line_width=3)
-                        fig_weekly_trend.update_layout(
-                            height=350,
-                            plot_bgcolor="white",
-                            xaxis_tickangle=-45
-                        )
-                        st.plotly_chart(fig_weekly_trend, use_container_width=True)
-
-                    avg_weekly = weekly_energy["Total_kWh"].mean()
-                    max_weekly = weekly_energy["Total_kWh"].max()
-                    st.info(f"📊 **Weekly Statistics:** Average = **{avg_weekly:,.0f} kWh/week** | Peak = **{max_weekly:,.0f} kWh**")
+                if not selected_products_trends:
+                    st.warning("⚠️ Please select at least one product.")
                 else:
-                    st.info("📅 Weekly energy data not available for the selected period")
-                st.markdown(
-                '<div class="section-header">📊 Monthly & Weekly KPI Trends</div>',
-                unsafe_allow_html=True
-                    )
-
-                # ===== NEW: TIMELINE FILTER =====
-                st.subheader("📅 Timeline Filter")
-                
-                # Get date range from data
-                min_date = results.get("overlap_start", wagons_df["t0"].min())
-                max_date = results.get("overlap_end", wagons_df["t0"].max())
-                
-                col_date1, col_date2, col_date3 = st.columns([2, 2, 1])
-                
-                with col_date1:
-                    start_date = st.date_input(
-                        "Start Date",
-                        value=pd.to_datetime(min_date).date(),
-                        min_value=pd.to_datetime(min_date).date(),
-                        max_value=pd.to_datetime(max_date).date(),
-                        key="trend_start_date"
-                    )
-                
-                with col_date2:
-                    end_date = st.date_input(
-                        "End Date",
-                        value=pd.to_datetime(max_date).date(),
-                        min_value=pd.to_datetime(min_date).date(),
-                        max_value=pd.to_datetime(max_date).date(),
-                        key="trend_end_date"
-                    )
-                
-                with col_date3:
-                    apply_date_filter = st.button("Apply Filter", key="apply_date_filter")
-                
-                # Convert to datetime for filtering
-                start_datetime = pd.to_datetime(start_date)
-                end_datetime = pd.to_datetime(end_date) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
-                
-                # Filter summary data by date range
-                # We need to filter based on the original wagon data
-                if "t0" in wagons_df.columns:
-                    date_mask = (wagons_df["t0"] >= start_datetime) & (wagons_df["t0"] <= end_datetime)
-                    wagons_filtered = wagons_df[date_mask].copy()
-                else:
-                    wagons_filtered = wagons_df.copy()
-                
-                # Get months in the filtered range
-                months_in_range = wagons_filtered["Month"].unique().tolist() if not wagons_filtered.empty else []
-                
-                # Filter summary to only include months in range
-                summary_filtered = summary[summary["Month"].isin(months_in_range)].copy()
-                
-                # Show selected period info
-                days_selected = (end_datetime - start_datetime).days + 1
-                st.info(f"📅 **Selected Period:** {start_date} to {end_date} ({days_selected} days) | "
-                       f"**Wagons in period:** {len(wagons_filtered):,} | "
-                       f"**Volume:** {wagons_filtered['m3'].sum():,.2f} m³")
-                # Monthly KPI Charts
-                col_o3, col_o4 = st.columns(2)
-                
-                with col_o3:
-                    fig_monthly_kwh_m3 = px.line(
-                        monthly_overall,
-                        x="Month",
-                        y="kWh_per_m3",
-                        markers=True,
-                        title="Monthly kWh/m³ Trend"
-                    )
-                    fig_monthly_kwh_m3.update_traces(line_color='#667eea', line_width=3)
-                    fig_monthly_kwh_m3.update_layout(height=300, plot_bgcolor="white")
-                    st.plotly_chart(fig_monthly_kwh_m3, use_container_width=True)
-
-                with col_o4:
-                    fig_monthly_kwh_kg = px.line(
-                        monthly_overall,
-                        x="Month",
-                        y="kWh_per_kg",
-                        markers=True,
-                        title="Monthly kWh/kg Trend"
-                    )
-                    fig_monthly_kwh_kg.update_traces(line_color='#f093fb', line_width=3)
-                    fig_monthly_kwh_kg.update_layout(height=300, plot_bgcolor="white")
-                    st.plotly_chart(fig_monthly_kwh_kg, use_container_width=True)
-
-                # Trends by Product
-                with st.expander("🧱 Trends by Product - Detailed Charts"):
-                    st.markdown("### Energy Efficiency by Product")
+                    # Filter summary to selected products
+                    summary_filtered = summary_date_filtered[
+                        summary_date_filtered["Produkt"].isin(selected_products_trends)
+                    ].copy()
                     
-                    col_p1, col_p2 = st.columns(2)
+                    if summary_filtered.empty:
+                        st.warning("⚠️ No data for selected products in this date range.")
+                    else:
+                        st.info(f"📊 Showing **{len(selected_products_trends)}** product(s)")
 
-                    with col_p1:
-                        fig_prod_efficiency = px.line(
-                            monthly_product,
-                            x="Month",
-                            y="kWh_per_m3",
-                            color="Produkt",
-                            markers=True,
-                            title="Energy Efficiency by Product (kWh/m³)"
+                        # Monthly by Product - FIXED: Remove 0 values
+                        monthly_product = summary_filtered.groupby(["Month", "Produkt"], as_index=False).agg({
+                            "Energy_thermal_kWh": "sum",
+                            "Energy_electrical_kWh": "sum",
+                            "Energy_kWh": "sum",
+                            "Volume_m3": "sum",
+                            "Water_kg": "sum",
+                        })
+                        
+                        # Filter out rows with no volume
+                        monthly_product = monthly_product[monthly_product["Volume_m3"] > 0].copy()
+                        
+                        monthly_product["kWh_per_m3"] = monthly_product["Energy_kWh"] / monthly_product["Volume_m3"]
+                        monthly_product["kWh_per_kg"] = np.where(
+                            monthly_product["Water_kg"] > 0,
+                            monthly_product["Energy_kWh"] / monthly_product["Water_kg"],
+                            0
                         )
-                        fig_prod_efficiency.update_layout(height=350, plot_bgcolor="white")
-                        st.plotly_chart(fig_prod_efficiency, use_container_width=True)
+                        monthly_product["kWh_thermal_per_m3"] = monthly_product["Energy_thermal_kWh"] / monthly_product["Volume_m3"]
 
-                    with col_p2:
-                        fig_prod_specific = px.line(
-                            monthly_product,
-                            x="Month",
-                            y="kWh_per_kg",
-                            color="Produkt",
-                            markers=True,
-                            title="Specific Energy by Product (kWh/kg water)"
+                        # Monthly by Zone - FIXED: Remove 0 values
+                        monthly_zone = summary_filtered.groupby(["Month", "Zone"], as_index=False).agg({
+                            "Energy_thermal_kWh": "sum",
+                            "Energy_electrical_kWh": "sum",
+                            "Energy_kWh": "sum",
+                            "Volume_m3": "sum",
+                            "Water_kg": "sum",
+                        })
+                        
+                        monthly_zone = monthly_zone[monthly_zone["Volume_m3"] > 0].copy()
+                        
+                        monthly_zone["kWh_per_m3"] = monthly_zone["Energy_kWh"] / monthly_zone["Volume_m3"]
+                        monthly_zone["kWh_per_kg"] = np.where(
+                            monthly_zone["Water_kg"] > 0,
+                            monthly_zone["Energy_kWh"] / monthly_zone["Water_kg"],
+                            0
                         )
-                        fig_prod_specific.update_layout(height=350, plot_bgcolor="white")
-                        st.plotly_chart(fig_prod_specific, use_container_width=True)
 
-                    st.markdown("### Thermal Efficiency and Volume by Product")
-                    
-                    col_p3, col_p4 = st.columns(2)
-
-                    with col_p3:
-                        fig_prod_thermal = px.line(
-                            monthly_product,
-                            x="Month",
-                            y="kWh_thermal_per_m3",
-                            color="Produkt",
-                            markers=True,
-                            title="Thermal Efficiency by Product (kWh/m³)"
+                        # Monthly Overall
+                        monthly_overall = summary_filtered.groupby(["Month"], as_index=False).agg({
+                            "Energy_thermal_kWh": "sum",
+                            "Energy_electrical_kWh": "sum",
+                            "Energy_kWh": "sum",
+                            "Volume_m3": "sum",
+                            "Water_kg": "sum",
+                        })
+                        
+                        monthly_overall["kWh_per_m3"] = np.where(
+                            monthly_overall["Volume_m3"] > 0,
+                            monthly_overall["Energy_kWh"] / monthly_overall["Volume_m3"],
+                            0
                         )
-                        fig_prod_thermal.update_layout(height=350, plot_bgcolor="white")
-                        st.plotly_chart(fig_prod_thermal, use_container_width=True)
-
-                    with col_p4:
-                        fig_prod_volume = px.line(
-                            monthly_product,
-                            x="Month",
-                            y="Volume_m3",
-                            color="Produkt",
-                            markers=True,
-                            title="Production Volume by Product (m³)"
+                        monthly_overall["kWh_per_kg"] = np.where(
+                            monthly_overall["Water_kg"] > 0,
+                            monthly_overall["Energy_kWh"] / monthly_overall["Water_kg"],
+                            0
                         )
-                        fig_prod_volume.update_layout(height=350, plot_bgcolor="white")
-                        st.plotly_chart(fig_prod_volume, use_container_width=True)
 
-                    st.markdown("### Energy and Water by Product")
-                    
-                    col_p5, col_p6 = st.columns(2)
-                    
-                    with col_p5:
-                        fig_prod_energy = px.line(
-                            monthly_product,
-                            x="Month",
-                            y="Energy_kWh",
-                            color="Produkt",
-                            markers=True,
-                            title="Total Energy by Product (kWh)"
-                        )
-                        fig_prod_energy.update_layout(height=350, plot_bgcolor="white")
-                        st.plotly_chart(fig_prod_energy, use_container_width=True)
+                        # Weekly data - BASED ON Z2 ENTRY
+                        weekly_energy = None
+                        if "energy" in results and not results["energy"].empty:
+                            energy_df = results["energy"].copy()
+                            
+                            # Filter energy to selected date range
+                            if "E_start" in energy_df.columns:
+                                energy_df = energy_df[
+                                    (energy_df["E_start"] >= start_datetime) & 
+                                    (energy_df["E_start"] <= end_datetime)
+                                ]
+                            
+                            if not energy_df.empty:
+                                energy_df["Week"] = energy_df["E_start"].dt.isocalendar().week
+                                energy_df["Year"] = energy_df["E_start"].dt.year
 
-                    with col_p6:
-                        fig_prod_water = px.line(
-                            monthly_product,
-                            x="Month",
-                            y="Water_kg",
-                            color="Produkt",
-                            markers=True,
-                            title="Water Evaporated by Product (kg)"
-                        )
-                        fig_prod_water.update_layout(height=350, plot_bgcolor="white")
-                        st.plotly_chart(fig_prod_water, use_container_width=True)
+                                weekly_energy = energy_df.groupby(["Year", "Week"], as_index=False).agg({
+                                    "E_thermal_total_kWh": "sum",
+                                    "E_el_kWh": "sum"
+                                })
+                                weekly_energy["Total_kWh"] = weekly_energy["E_thermal_total_kWh"] + weekly_energy["E_el_kWh"]
+                                weekly_energy["Week_Label"] = (
+                                    weekly_energy["Year"].astype(str) + "-W" +
+                                    weekly_energy["Week"].astype(str).str.zfill(2)
+                                )
+                                weekly_energy = weekly_energy[weekly_energy["Total_kWh"] > 0]
 
-                    # Product comparison table
-                    st.markdown("### 📊 Product Comparison Summary")
-                    product_comparison = monthly_product.groupby("Produkt", as_index=False).agg({
-                        "Energy_thermal_kWh": "sum",
-                        "Energy_electrical_kWh": "sum",
-                        "Energy_kWh": "sum",
-                        "Volume_m3": "sum",
-                        "Water_kg": "sum",
-                    })
-                    product_comparison["kWh/m³"] = safe_divide(
-                        product_comparison["Energy_kWh"], product_comparison["Volume_m3"]
-                    )
-                    product_comparison["kWh/kg"] = safe_divide(
-                        product_comparison["Energy_kWh"], product_comparison["Water_kg"]
-                    )
-                    product_comparison["Water/m³"] = safe_divide(
-                        product_comparison["Water_kg"], product_comparison["Volume_m3"]
-                    )
-                    st.dataframe(product_comparison.round(2), use_container_width=True, hide_index=True)
+                        # Overall Trends
+                        st.subheader("📈 Overall Performance Trends")
+                        
+                        filtered_thermal = monthly_overall["Energy_thermal_kWh"].sum()
+                        filtered_electrical = monthly_overall["Energy_electrical_kWh"].sum()
+                        filtered_energy = monthly_overall["Energy_kWh"].sum()
+                        filtered_volume = monthly_overall["Volume_m3"].sum()
+                        filtered_water = monthly_overall["Water_kg"].sum()
+                        
+                        col_m1, col_m2, col_m3, col_m4 = st.columns(4)
+                        with col_m1:
+                            st.metric("Total Energy", f"{filtered_energy:,.0f} kWh")
+                        with col_m2:
+                            st.metric("Total Volume", f"{filtered_volume:,.0f} m³")
+                        with col_m3:
+                            st.metric("Total Water", f"{filtered_water:,.0f} kg")
+                        with col_m4:
+                            filtered_kwh_kg = filtered_energy / filtered_water if filtered_water > 0 else 0
+                            st.metric("kWh/kg", f"{filtered_kwh_kg:.3f}")
 
-                # Trends by Zone
-                with st.expander("🏭 Trends by Zone - Detailed Charts"):
-                    st.markdown("### Zone Performance Over Time")
-                    
-                    col_z1, col_z2 = st.columns(2)
+                        # Monthly Charts
+                        col_o1, col_o2 = st.columns(2)
 
-                    with col_z1:
-                        fig_zone_efficiency = px.line(
-                            monthly_zone,
-                            x="Month",
-                            y="kWh_per_m3",
-                            color="Zone",
-                            markers=True,
-                            title="Energy Efficiency by Zone (kWh/m³)"
-                        )
-                        fig_zone_efficiency.update_layout(height=350, plot_bgcolor="white")
-                        st.plotly_chart(fig_zone_efficiency, use_container_width=True)
+                        with col_o1:
+                            fig_monthly_energy = go.Figure()
+                            fig_monthly_energy.add_trace(go.Bar(
+                                name='Thermal',
+                                x=monthly_overall["Month"],
+                                y=monthly_overall["Energy_thermal_kWh"],
+                                marker_color='#FF6B6B',
+                                text=[f"{v:,.0f}" for v in monthly_overall["Energy_thermal_kWh"]],
+                                textposition='inside'
+                            ))
+                            fig_monthly_energy.add_trace(go.Bar(
+                                name='Electrical',
+                                x=monthly_overall["Month"],
+                                y=monthly_overall["Energy_electrical_kWh"],
+                                marker_color='#4ECDC4',
+                                text=[f"{v:,.0f}" for v in monthly_overall["Energy_electrical_kWh"]],
+                                textposition='inside'
+                            ))
+                            fig_monthly_energy.update_layout(
+                                title=f"Monthly Energy ({start_date} to {end_date})",
+                                xaxis_title="Month",
+                                yaxis_title="Energy (kWh)",
+                                barmode='stack',
+                                height=350,
+                                plot_bgcolor="white"
+                            )
+                            st.plotly_chart(fig_monthly_energy, use_container_width=True)
 
-                    with col_z2:
-                        fig_zone_specific = px.line(
-                            monthly_zone,
-                            x="Month",
-                            y="kWh_per_kg",
-                            color="Zone",
-                            markers=True,
-                            title="Specific Energy by Zone (kWh/kg water)"
-                        )
-                        fig_zone_specific.update_layout(height=350, plot_bgcolor="white")
-                        st.plotly_chart(fig_zone_specific, use_container_width=True)
+                        with col_o2:
+                            fig_monthly_volume = px.bar(
+                                monthly_overall,
+                                x="Month",
+                                y="Volume_m3",
+                                title=f"Monthly Volume ({start_date} to {end_date})",
+                                labels={"Volume_m3": "Volume (m³)", "Month": "Month"},
+                                text_auto='.0f'
+                            )
+                            fig_monthly_volume.update_traces(marker_color='#26de81', textposition='outside')
+                            fig_monthly_volume.update_layout(height=350, plot_bgcolor="white", showlegend=False)
+                            st.plotly_chart(fig_monthly_volume, use_container_width=True)
 
-                    col_z3, col_z4 = st.columns(2)
+                        # Weekly Trends - BASED ON Z2 ENTRY
+                        st.subheader("📅 Weekly Energy Trends (Based on Zone 2 Entry)")
+                        
+                        if weekly_energy is not None and not weekly_energy.empty:
+                            col_w1, col_w2 = st.columns(2)
 
-                    with col_z3:
-                        fig_zone_thermal = px.line(
-                            monthly_zone,
-                            x="Month",
-                            y="Energy_thermal_kWh",
-                            color="Zone",
-                            markers=True,
-                            title="Thermal Energy by Zone (kWh)"
-                        )
-                        fig_zone_thermal.update_layout(height=350, plot_bgcolor="white")
-                        st.plotly_chart(fig_zone_thermal, use_container_width=True)
+                            with col_w1:
+                                fig_weekly_total = go.Figure()
+                                fig_weekly_total.add_trace(go.Bar(
+                                    name='Thermal',
+                                    x=weekly_energy["Week_Label"],
+                                    y=weekly_energy["E_thermal_total_kWh"],
+                                    marker_color='#FF6B6B'
+                                ))
+                                fig_weekly_total.add_trace(go.Bar(
+                                    name='Electrical',
+                                    x=weekly_energy["Week_Label"],
+                                    y=weekly_energy["E_el_kWh"],
+                                    marker_color='#4ECDC4'
+                                ))
+                                fig_weekly_total.update_layout(
+                                    title=f"Weekly Energy ({start_date} to {end_date})",
+                                    xaxis_title="Week",
+                                    yaxis_title="Energy (kWh)",
+                                    barmode='stack',
+                                    height=350,
+                                    plot_bgcolor="white",
+                                    xaxis_tickangle=-45
+                                )
+                                st.plotly_chart(fig_weekly_total, use_container_width=True)
 
-                    with col_z4:
-                        fig_zone_volume = px.line(
-                            monthly_zone,
-                            x="Month",
-                            y="Volume_m3",
-                            color="Zone",
-                            markers=True,
-                            title="Volume by Zone (m³)"
-                        )
-                        fig_zone_volume.update_layout(height=350, plot_bgcolor="white")
-                        st.plotly_chart(fig_zone_volume, use_container_width=True)
+                            with col_w2:
+                                fig_weekly_trend = px.line(
+                                    weekly_energy,
+                                    x="Week_Label",
+                                    y="Total_kWh",
+                                    markers=True,
+                                    title=f"Weekly Total Energy Trend"
+                                )
+                                fig_weekly_trend.update_traces(line_color='#667eea', line_width=3)
+                                fig_weekly_trend.update_layout(
+                                    height=350,
+                                    plot_bgcolor="white",
+                                    xaxis_tickangle=-45
+                                )
+                                st.plotly_chart(fig_weekly_trend, use_container_width=True)
+
+                            avg_weekly = weekly_energy["Total_kWh"].mean()
+                            max_weekly = weekly_energy["Total_kWh"].max()
+                            st.info(f"📊 **Weekly Stats:** Avg = **{avg_weekly:,.0f} kWh/week** | Peak = **{max_weekly:,.0f} kWh**")
+                        else:
+                            st.info("📅 No weekly energy data for the selected period")
+
+                        # Monthly KPI Charts
+                        col_o3, col_o4 = st.columns(2)
+                        
+                        with col_o3:
+                            fig_monthly_kwh_m3 = px.line(
+                                monthly_overall,
+                                x="Month",
+                                y="kWh_per_m3",
+                                markers=True,
+                                title="Monthly kWh/m³ Trend"
+                            )
+                            fig_monthly_kwh_m3.update_traces(line_color='#667eea', line_width=3)
+                            fig_monthly_kwh_m3.update_layout(height=300, plot_bgcolor="white")
+                            st.plotly_chart(fig_monthly_kwh_m3, use_container_width=True)
+
+                        with col_o4:
+                            fig_monthly_kwh_kg = px.line(
+                                monthly_overall,
+                                x="Month",
+                                y="kWh_per_kg",
+                                markers=True,
+                                title="Monthly kWh/kg Trend"
+                            )
+                            fig_monthly_kwh_kg.update_traces(line_color='#f093fb', line_width=3)
+                            fig_monthly_kwh_kg.update_layout(height=300, plot_bgcolor="white")
+                            st.plotly_chart(fig_monthly_kwh_kg, use_container_width=True)
+
+                        # Trends by Product - FIXED
+                        with st.expander("🧱 Trends by Product - Detailed Charts"):
+                            if monthly_product.empty:
+                                st.warning("No product data available.")
+                            else:
+                                st.markdown("### Energy Efficiency by Product")
+                                
+                                col_p1, col_p2 = st.columns(2)
+
+                                with col_p1:
+                                    fig_prod_efficiency = px.line(
+                                        monthly_product,
+                                        x="Month",
+                                        y="kWh_per_m3",
+                                        color="Produkt",
+                                        markers=True,
+                                        title="Energy Efficiency (kWh/m³)"
+                                    )
+                                    fig_prod_efficiency.update_layout(height=350, plot_bgcolor="white")
+                                    st.plotly_chart(fig_prod_efficiency, use_container_width=True)
+
+                                with col_p2:
+                                    fig_prod_specific = px.line(
+                                        monthly_product,
+                                        x="Month",
+                                        y="kWh_per_kg",
+                                        color="Produkt",
+                                        markers=True,
+                                        title="Specific Energy (kWh/kg)"
+                                    )
+                                    fig_prod_specific.update_layout(height=350, plot_bgcolor="white")
+                                    st.plotly_chart(fig_prod_specific, use_container_width=True)
+
+                                col_p3, col_p4 = st.columns(2)
+
+                                with col_p3:
+                                    fig_prod_thermal = px.line(
+                                        monthly_product,
+                                        x="Month",
+                                        y="kWh_thermal_per_m3",
+                                        color="Produkt",
+                                        markers=True,
+                                        title="Thermal Efficiency (kWh/m³)"
+                                    )
+                                    fig_prod_thermal.update_layout(height=350, plot_bgcolor="white")
+                                    st.plotly_chart(fig_prod_thermal, use_container_width=True)
+
+                                with col_p4:
+                                    fig_prod_volume = px.line(
+                                        monthly_product,
+                                        x="Month",
+                                        y="Volume_m3",
+                                        color="Produkt",
+                                        markers=True,
+                                        title="Volume by Product (m³)"
+                                    )
+                                    fig_prod_volume.update_layout(height=350, plot_bgcolor="white")
+                                    st.plotly_chart(fig_prod_volume, use_container_width=True)
+
+                        # Trends by Zone - FIXED
+                        with st.expander("🏭 Trends by Zone - Detailed Charts"):
+                            if monthly_zone.empty:
+                                st.warning("No zone data available.")
+                            else:
+                                col_z1, col_z2 = st.columns(2)
+
+                                with col_z1:
+                                    fig_zone_efficiency = px.line(
+                                        monthly_zone,
+                                        x="Month",
+                                        y="kWh_per_m3",
+                                        color="Zone",
+                                        markers=True,
+                                        title="Energy Efficiency by Zone (kWh/m³)"
+                                    )
+                                    fig_zone_efficiency.update_layout(height=350, plot_bgcolor="white")
+                                    st.plotly_chart(fig_zone_efficiency, use_container_width=True)
+
+                                with col_z2:
+                                    fig_zone_specific = px.line(
+                                        monthly_zone,
+                                        x="Month",
+                                        y="kWh_per_kg",
+                                        color="Zone",
+                                        markers=True,
+                                        title="Specific Energy by Zone (kWh/kg)"
+                                    )
+                                    fig_zone_specific.update_layout(height=350, plot_bgcolor="white")
+                                    st.plotly_chart(fig_zone_specific, use_container_width=True)
+
+                                col_z3, col_z4 = st.columns(2)
+
+                                with col_z3:
+                                    fig_zone_thermal = px.line(
+                                        monthly_zone,
+                                        x="Month",
+                                        y="Energy_thermal_kWh",
+                                        color="Zone",
+                                        markers=True,
+                                        title="Thermal Energy by Zone (kWh)"
+                                    )
+                                    fig_zone_thermal.update_layout(height=350, plot_bgcolor="white")
+                                    st.plotly_chart(fig_zone_thermal, use_container_width=True)
+
+                                with col_z4:
+                                    fig_zone_volume = px.line(
+                                        monthly_zone,
+                                        x="Month",
+                                        y="Volume_m3",
+                                        color="Zone",
+                                        markers=True,
+                                        title="Volume by Zone (m³)"
+                                    )
+                                    fig_zone_volume.update_layout(height=350, plot_bgcolor="white")
+                                    st.plotly_chart(fig_zone_volume, use_container_width=True)
 
             # ===== 4. SINGLE PRODUCT DEEP DIVE =====
             st.markdown(
@@ -2018,7 +2048,7 @@ Verification:
             
             selected_single_product = st.selectbox(
                 "Select a product for detailed analysis:",
-                options=available_products,
+                options=sorted(summary["Produkt"].unique().tolist()),
                 key="single_product_select"
             )
             
@@ -2445,16 +2475,3 @@ Verification:
         st.error(f"❌ Display error: {e}")
         with st.expander("🔍 View Error Details"):
             st.exception(e)
-
-
-
-
-
-
-
-
-
-
-
-
-
