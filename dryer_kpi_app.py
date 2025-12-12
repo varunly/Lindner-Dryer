@@ -966,10 +966,9 @@ if st.session_state.analysis_complete and st.session_state.results:
             else:
                 st.info(f"🏭 **Showing data for all Trockner (A + B)** | After all filters: **{format_german_int(total_wagons)}** rows")
 
-            # ============================================================
+                        # ============================================================
             #                     SUMMARY KPIs SECTION
             # ============================================================
-            
             st.markdown('<div class="section-header">📈 Summary KPIs</div>', unsafe_allow_html=True)
 
             st.subheader("🏭 Production")
@@ -2532,4 +2531,5 @@ Verification:
         st.error(f"❌ Display error: {e}")
         with st.expander("🔍 View Error Details"):
             st.exception(e)
+
 
