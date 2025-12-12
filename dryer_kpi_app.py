@@ -966,7 +966,7 @@ if st.session_state.analysis_complete and st.session_state.results:
             else:
                 st.info(f"🏭 **Showing data for all Trockner (A + B)** | After all filters: **{format_german_int(total_wagons)}** rows")
 
-                        # ============================================================
+                                                # ============================================================
             #                     SUMMARY KPIs SECTION
             # ============================================================
             st.markdown('<div class="section-header">📈 Summary KPIs</div>', unsafe_allow_html=True)
@@ -1004,6 +1004,8 @@ if st.session_state.analysis_complete and st.session_state.results:
                 st.markdown(f'<div class="metric-card"><h3>kWh/m³</h3><h2>{format_german(avg_kwh_per_m3, 1)} kWh/m³</h2></div>', unsafe_allow_html=True)
             with c11:
                 st.markdown(f'<div class="metric-card"><h3>Thermal kWh/m³</h3><h2>{format_german(avg_kwh_thermal_per_m3, 1)} kWh/m³</h2></div>', unsafe_allow_html=True)
+                
+
 
             # ===== INFO BOX =====
             st.info(
@@ -2531,5 +2533,6 @@ Verification:
         st.error(f"❌ Display error: {e}")
         with st.expander("🔍 View Error Details"):
             st.exception(e)
+
 
 
