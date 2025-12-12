@@ -452,7 +452,7 @@ def run_analysis(energy_path: str, wagon_path: str, products_filter, month_filte
                 with col4:
                     st.success(f"**End:** {overlap_end}")
                 with col5:
-                    st.success(f"**Duration:** {overlap_days} days")
+                    st.success(f"**Duration:** {format_german_int(overlap_days)} days")
                 
                 st.info("⚠️ Only data within this overlap period is used for all KPI calculations!")
         
@@ -1676,7 +1676,7 @@ Verification:
             summary_date_filtered = summary[summary["Month"].isin(months_in_range)].copy()
             
             days_selected = (end_datetime - start_datetime).days + 1
-            st.info(f"📅 **Selected Period:** {start_date} to {end_date} ({days_selected} days) | "
+            st.info(f"📅 **Selected Period:** {start_date} to {end_date} ({format_german_int(days_selected)} days) | "
                    f"**Wagons:** {format_german_int(len(wagons_date_filtered))} | "
                    f"**Volume:** {format_german(wagons_date_filtered['m3'].sum(), 2)} m³")
 
