@@ -972,7 +972,7 @@ if st.session_state.analysis_complete and st.session_state.results:
             st.markdown('<div class="section-header">📈 Summary KPIs</div>', unsafe_allow_html=True)
 
             st.subheader("🏭 Production")
-            c1, c2, c3 = st.columns(4)
+            c1, c2, c3, c4 = st.columns(4)
 
             with c1:
                 st.markdown(f'<div class="metric-card"><h3> Total Number of Wagon Rows </h3><h2>{format_german_int(total_wagons)}</h2></div>', unsafe_allow_html=True)
@@ -2531,6 +2531,7 @@ Verification:
         st.error(f"❌ Display error: {e}")
         with st.expander("🔍 View Error Details"):
             st.exception(e)
+
 
 
 
