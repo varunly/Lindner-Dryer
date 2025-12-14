@@ -972,17 +972,15 @@ if st.session_state.analysis_complete and st.session_state.results:
             st.markdown('<div class="section-header">📈 Summary KPIs</div>', unsafe_allow_html=True)
 
             st.subheader("🏭 Production")
-            c1, c2, c3, c4 = st.columns(4)
+            c1, c2, c3 = st.columns(4)
 
             with c1:
                 st.markdown(f'<div class="metric-card"><h3> Total Number of Wagon Rows </h3><h2>{format_german_int(total_wagons)}</h2></div>', unsafe_allow_html=True)
             with c2:
-                st.markdown(f'<div class="metric-card"><h3>Total Volume</h3><h2>{format_german(total_volume, 2)} m³</h2></div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="metric-card"><h3>Total Volume of the products</h3><h2>{format_german(total_volume, 2)} m³</h2></div>', unsafe_allow_html=True)
             with c3:
-                st.markdown(f'<div class="metric-card"><h3>Water Evaporated</h3><h2>{format_german(total_water, 0)} kg</h2></div>', unsafe_allow_html=True)
-            with c4:
-                st.markdown(f'<div class="metric-card"><h3>Water/m³</h3><h2>{format_german(avg_water_per_m3, 1)} kg/m³</h2></div>', unsafe_allow_html=True)
-
+                st.markdown(f'<div class="metric-card"><h3>Total Water Evaporated(in kg) </h3><h2>{format_german(total_water, 0)} kg</h2></div>', unsafe_allow_html=True)
+   
             st.subheader("⚡ Energy Consumption")
             c5, c6, c7 = st.columns(3)
 
@@ -2533,6 +2531,7 @@ Verification:
         st.error(f"❌ Display error: {e}")
         with st.expander("🔍 View Error Details"):
             st.exception(e)
+
 
 
 
