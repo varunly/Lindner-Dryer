@@ -241,13 +241,3 @@ This repository is delivered as part of a structured handover package including:
 
 All logic is fully documented to ensure continuity after handover.
 
----
-
-If you want, I can also:
-
-* Create a **short GitHub description**
-* Add **badges** (Python, Streamlit)
-* Write a **CONTRIBUTING.md**
-* Prepare a **requirements.txt**
-
-Just tell me.
