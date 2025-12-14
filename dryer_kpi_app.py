@@ -2061,6 +2061,7 @@ Verification:
                                     st.plotly_chart(fig_zone_volume, use_container_width=True)
             
             # ===== 4. SINGLE PRODUCT DEEP DIVE =====
+            # ===== 4. SINGLE PRODUCT DEEP DIVE =====
             st.markdown(
                 '<div class="section-header">🔬 Single Product Deep Dive</div>',
                 unsafe_allow_html=True
@@ -2078,23 +2079,13 @@ Verification:
                 if single_product_data.empty:
                     st.warning(f"No data available for {selected_single_product}")
                 else:
-                    single_monthly = single_product_data.groupby("Month", as_index=False).agg({
-                        "Energy_thermal_kWh": "sum",
-                        "Energy_electrical_kWh": "sum",
-                        "Energy_kWh": "sum",
-                        "Volume_m3": "sum",
-                        "Water_kg": "sum",
-                    })
-                    single_monthly["kWh_per_m3"] = safe_divide(
-                        single_monthly["Energy_kWh"], single_monthly["Volume_m3"]
-                    )
-                    single_monthly["kWh_per_kg"] = safe_divide(
-                        single_monthly["Energy_kWh"], single_monthly["Water_kg"]
-                    )
+                    # Calculate totals directly from single_product_data
+                    total_energy_prod = single_product_data["Energy_kWh"].sum()
+                    total_thermal_prod = single_product_data["Energy_thermal_kWh"].sum()
+                    total_electrical_prod = single_product_data["Energy_electrical_kWh"].sum()
+                    total_volume_prod = single_product_data["Volume_m3"].sum()
+                    total_water_prod = single_product_data["Water_kg"].sum()
                     
-                    total_energy_prod = single_monthly["Energy_kWh"].sum()
-                    total_volume_prod = single_monthly["Volume_m3"].sum()
-                    total_water_prod = single_monthly["Water_kg"].sum()
                     avg_kwh_m3_prod = safe_divide(total_energy_prod, total_volume_prod)
                     avg_kwh_kg_prod = safe_divide(total_energy_prod, total_water_prod)
                     
@@ -2112,81 +2103,7 @@ Verification:
                     with col_s5:
                         st.metric("kWh/kg", format_german(avg_kwh_kg_prod, 3))
                     
-                    col_sp1, col_sp2 = st.columns(2)
-                    
-                    with col_sp1:
-                        fig_single_energy = go.Figure()
-                        fig_single_energy.add_trace(go.Bar(
-                            name='Thermal',
-                            x=single_monthly["Month"],
-                            y=single_monthly["Energy_thermal_kWh"],
-                            marker_color='#FF6B6B'
-                        ))
-                        fig_single_energy.add_trace(go.Bar(
-                            name='Electrical',
-                            x=single_monthly["Month"],
-                            y=single_monthly["Energy_electrical_kWh"],
-                            marker_color='#4ECDC4'
-                        ))
-                        fig_single_energy.update_layout(
-                            title=f"{selected_single_product} - Monthly Energy (kWh)",
-                            barmode='stack',
-                            height=300,
-                            plot_bgcolor="white",
-                            separators=",."
-                        )
-                        st.plotly_chart(fig_single_energy, use_container_width=True)
-                    
-                    with col_sp2:
-                        fig_single_kpi = go.Figure()
-                        fig_single_kpi.add_trace(go.Scatter(
-                            x=single_monthly["Month"],
-                            y=single_monthly["kWh_per_m3"],
-                            mode='lines+markers',
-                            name='kWh/m³',
-                            line=dict(color='#667eea', width=3)
-                        ))
-                        fig_single_kpi.add_trace(go.Scatter(
-                            x=single_monthly["Month"],
-                            y=single_monthly["kWh_per_kg"] * 100,
-                            mode='lines+markers',
-                            name='kWh/kg (×100)',
-                            line=dict(color='#f093fb', width=3),
-                            yaxis='y2'
-                        ))
-                        fig_single_kpi.update_layout(
-                            title=f"{selected_single_product} - Monthly KPIs",
-                            yaxis=dict(title="kWh/m³"),
-                            yaxis2=dict(title="kWh/kg (×100)", overlaying='y', side='right'),
-                            height=300,
-                            plot_bgcolor="white",
-                            separators=",."
-                        )
-                        st.plotly_chart(fig_single_kpi, use_container_width=True)
-                    
-                    st.subheader(f"📋 {selected_single_product} - Monthly Details")
-                    display_single = single_monthly.copy()
-                    
-                    # Format for German display
-                    display_single["Energy_thermal_kWh"] = display_single["Energy_thermal_kWh"].apply(lambda x: format_german(x, 0))
-                    display_single["Energy_electrical_kWh"] = display_single["Energy_electrical_kWh"].apply(lambda x: format_german(x, 0))
-                    display_single["Energy_kWh"] = display_single["Energy_kWh"].apply(lambda x: format_german(x, 0))
-                    display_single["Volume_m3"] = display_single["Volume_m3"].apply(lambda x: format_german(x, 2))
-                    display_single["Water_kg"] = display_single["Water_kg"].apply(lambda x: format_german(x, 0))
-                    display_single["kWh_per_m3"] = display_single["kWh_per_m3"].apply(lambda x: format_german(x, 1))
-                    display_single["kWh_per_kg"] = display_single["kWh_per_kg"].apply(lambda x: format_german(x, 3))
-                    
-                    display_single = display_single.rename(columns={
-                        "Energy_thermal_kWh": "Thermal (kWh)",
-                        "Energy_electrical_kWh": "Electrical (kWh)",
-                        "Energy_kWh": "Total (kWh)",
-                        "Volume_m3": "Volume (m³)",
-                        "Water_kg": "Water (kg)",
-                        "kWh_per_m3": "kWh/m³",
-                        "kWh_per_kg": "kWh/kg"
-                    })
-                    st.dataframe(display_single, use_container_width=True, hide_index=True)
-                    
+                    # Product specifications (if available)
                     if selected_single_product in PRODUCT_SPECIFICATIONS:
                         spec = PRODUCT_SPECIFICATIONS[selected_single_product]
                         st.subheader(f"📐 {selected_single_product} - Specifications")
@@ -2531,6 +2448,7 @@ Verification:
         st.error(f"❌ Display error: {e}")
         with st.expander("🔍 View Error Details"):
             st.exception(e)
+
 
 
 
