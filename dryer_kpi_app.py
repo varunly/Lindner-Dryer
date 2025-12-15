@@ -2126,31 +2126,31 @@ Verification:
                                     fig_prod_specific.update_layout(height=350, plot_bgcolor="white", separators=",.")
                                     st.plotly_chart(fig_prod_specific, use_container_width=True)
 
-                                col_p3, col_p4 = st.columns(2)
+                               # col_p3, col_p4 = st.columns(2)
 
-                                with col_p3:
-                                    fig_prod_thermal = px.line(
-                                        monthly_product,
-                                        x="Month",
-                                        y="kWh_thermal_per_m3",
-                                        color="Produkt",
-                                        markers=True,
-                                        title="Thermal Efficiency (kWh/m³)"
-                                    )
-                                    fig_prod_thermal.update_layout(height=350, plot_bgcolor="white", separators=",.")
-                                    st.plotly_chart(fig_prod_thermal, use_container_width=True)
+                               # with col_p3:
+                               #     fig_prod_thermal = px.line(
+                               #         monthly_product,
+                               #         x="Month",
+                               #         y="kWh_thermal_per_m3",
+                               #         color="Produkt",
+                                #        markers=True,
+                                #        title="Thermal Efficiency (kWh/m³)"
+                                 #   )
+                                  #  fig_prod_thermal.update_layout(height=350, plot_bgcolor="white", separators=",.")
+                                   # st.plotly_chart(fig_prod_thermal, use_container_width=True)
 
-                                with col_p4:
-                                    fig_prod_volume = px.line(
-                                        monthly_product,
-                                        x="Month",
-                                        y="Volume_m3",
-                                        color="Produkt",
-                                        markers=True,
-                                        title="Volume by Product (m³)"
-                                    )
-                                    fig_prod_volume.update_layout(height=350, plot_bgcolor="white", separators=",.")
-                                    st.plotly_chart(fig_prod_volume, use_container_width=True)
+                             #   with col_p4:
+                              #      fig_prod_volume = px.line(
+                                      #  monthly_product,
+                               #         x="Month",
+                                #        y="Volume_m3",
+                                     #   color="Produkt",
+                                 #       markers=True,
+                                  #      title="Volume by Product (m³)"
+                                   # )
+                                    #fig_prod_volume.update_layout(height=350, plot_bgcolor="white", separators=",.")
+                                    #st.plotly_chart(fig_prod_volume, use_container_width=True)
 
                         # Trends by Zone
                         # Zeigt detaillierte Trends pro Zone in einem ausklappbaren Bereich an
@@ -2625,3 +2625,4 @@ Verification:
         st.error(f"❌ Display error: {e}")
         with st.expander("🔍 View Error Details"):
             st.exception(e)
+
