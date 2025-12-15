@@ -1090,7 +1090,7 @@ if st.session_state.analysis_complete and st.session_state.results:
             with c6:
                 st.markdown(f'<div class="metric-card"><h3>Total Electrical Energy</h3><h2>{format_german(total_electrical, 0)} kWh</h2></div>', unsafe_allow_html=True)
             with c7:
-                st.markdown(f'<div class="metric-card"><h3>Total Energy(Thermal + Electrical</h3><h2>{format_german(total_energy, 0)} kWh</h2></div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="metric-card"><h3>Total Energy(Thermal + Electrical)</h3><h2>{format_german(total_energy, 0)} kWh</h2></div>', unsafe_allow_html=True)
 
             # Zeigt KPIs zur Energieeffizienz an
             st.subheader("📊 Energy Efficiency")
@@ -2625,6 +2625,7 @@ Verification:
         st.error(f"❌ Display error: {e}")
         with st.expander("🔍 View Error Details"):
             st.exception(e)
+
 
 
 
