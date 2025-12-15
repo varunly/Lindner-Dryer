@@ -1086,22 +1086,22 @@ if st.session_state.analysis_complete and st.session_state.results:
             c5, c6, c7 = st.columns(3)
 
             with c5:
-                st.markdown(f'<div class="metric-card"><h3>Thermal Energy</h3><h2>{format_german(total_thermal, 0)} kWh</h2></div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="metric-card"><h3> Total Thermal Energy</h3><h2>{format_german(total_thermal, 0)} kWh</h2></div>', unsafe_allow_html=True)
             with c6:
-                st.markdown(f'<div class="metric-card"><h3>Electrical Energy</h3><h2>{format_german(total_electrical, 0)} kWh</h2></div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="metric-card"><h3>Total Electrical Energy</h3><h2>{format_german(total_electrical, 0)} kWh</h2></div>', unsafe_allow_html=True)
             with c7:
-                st.markdown(f'<div class="metric-card"><h3>Total Energy</h3><h2>{format_german(total_energy, 0)} kWh</h2></div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="metric-card"><h3>Total Energy(Thermal + Electrical</h3><h2>{format_german(total_energy, 0)} kWh</h2></div>', unsafe_allow_html=True)
 
             # Zeigt KPIs zur Energieeffizienz an
             st.subheader("📊 Energy Efficiency")
             c8, c9, c10, c11 = st.columns(4)
 
             with c8:
-                st.markdown(f'<div class="metric-card"><h3>kWh/kg water</h3><h2>{format_german(avg_kwh_per_kg, 3)} kWh/kg</h2></div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="metric-card"><h3> Total kWh/kg water</h3><h2>{format_german(avg_kwh_per_kg, 3)} kWh/kg</h2></div>', unsafe_allow_html=True)
             with c9:
-                st.markdown(f'<div class="metric-card"><h3>Thermal kWh/kg</h3><h2>{format_german(avg_kwh_thermal_per_kg, 3)} kWh/kg</h2></div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="metric-card"><h3>Thermal kWh/kg water</h3><h2>{format_german(avg_kwh_thermal_per_kg, 3)} kWh/kg</h2></div>', unsafe_allow_html=True)
             with c10:
-                st.markdown(f'<div class="metric-card"><h3>kWh/m³</h3><h2>{format_german(avg_kwh_per_m3, 1)} kWh/m³</h2></div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="metric-card"><h3>Total kWh/m³</h3><h2>{format_german(avg_kwh_per_m3, 1)} kWh/m³</h2></div>', unsafe_allow_html=True)
             with c11:
                 st.markdown(f'<div class="metric-card"><h3>Thermal kWh/m³</h3><h2>{format_german(avg_kwh_thermal_per_m3, 1)} kWh/m³</h2></div>', unsafe_allow_html=True)
                 
@@ -2625,5 +2625,6 @@ Verification:
         st.error(f"❌ Display error: {e}")
         with st.expander("🔍 View Error Details"):
             st.exception(e)
+
 
 
