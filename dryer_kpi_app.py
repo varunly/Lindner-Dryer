@@ -977,7 +977,7 @@ if st.session_state.analysis_complete and st.session_state.results:
             with c1:
                 st.markdown(f'<div class="metric-card"><h3> Total Number of Wagon Rows </h3><h2>{format_german_int(total_wagons)}</h2></div>', unsafe_allow_html=True)
             with c2:
-                st.markdown(f'<div class="metric-card"><h3>Total Volume of the products</h3><h2>{format_german(total_volume, 2)} m³</h2></div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="metric-card"><h3>Total Volume of the products(in m3)</h3><h2>{format_german(total_volume, 2)} m³</h2></div>', unsafe_allow_html=True)
             with c3:
                 st.markdown(f'<div class="metric-card"><h3>Total Water Evaporated(in kg) </h3><h2>{format_german(total_water, 0)} kg</h2></div>', unsafe_allow_html=True)
    
@@ -2448,6 +2448,7 @@ Verification:
         st.error(f"❌ Display error: {e}")
         with st.expander("🔍 View Error Details"):
             st.exception(e)
+
 
 
 
