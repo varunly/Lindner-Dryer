@@ -1,41 +1,43 @@
 # dryer_kpi_app.py
-import streamlit as st
-import pandas as pd
-import numpy as np
-import tempfile
-import plotly.express as px
-import plotly.graph_objects as go
-from io import BytesIO
-import os
+
+# Importiert die notwendigen Bibliotheken für das Dashboard
+import streamlit as st  # Für die Erstellung der Web-App-Oberfläche
+import pandas as pd  # Für die Datenmanipulation und -analyse (DataFrames)
+import numpy as np  # Für numerische Operationen und Arrays
+import tempfile  # Für die Erstellung und Verwaltung temporärer Dateien
+import plotly.express as px  # Für die Erstellung von interaktiven Diagrammen (einfache Syntax)
+import plotly.graph_objects as go  # Für detailliertere und komplexere Plotly-Diagramme
+from io import BytesIO  # Zur Verarbeitung von Datei-Inhalten direkt im Speicher (ohne sie zu speichern)
+import os  # Für Interaktionen mit dem Betriebssystem (z.B. Löschen von temporären Dateien)
 
 # ---------------------------------------------------------
-# Import KPI engine functions from backend module
+# Importiert die KPI-Berechnungs-Funktionen aus dem Backend-Modul
 # ---------------------------------------------------------
-try:
-    from dryer_kpi_monthly_final import (
-        parse_energy,
-        parse_wagon,
-        explode_intervals,
-        allocate_energy,
-        add_water_kpis,
-        compute_product_wagon_stats,
-        compute_zone_duration_stats,
-        predict_production_energy,
-        calculate_water_per_m3_formula,
-        get_product_water_curve,
-        WATER_PER_M3_KG,
-        PRODUCT_SPECIFICATIONS,
-        SUSPENSION_KG,
-        CONFIG,
-        safe_divide,
-        PLATES_PER_WAGON,
+try:  # Versucht, das folgende Modul zu importieren, um Fehler abzufangen
+    from dryer_kpi_monthly_final import (  # Importiert spezifische Funktionen aus der Datei 'dryer_kpi_monthly_final.py'
+        parse_energy,  # Funktion zum Einlesen und Verarbeiten der Energiestammdaten
+        parse_wagon,  # Funktion zum Einlesen und Verarbeiten der Hordenwagen-Stammdaten
+        explode_intervals,  # Funktion zur Erstellung von Zeitintervallen für jede Zone
+        allocate_energy,  # Funktion zur Zuweisung des Energieverbrauchs zu den Produkten/Wagen
+        add_water_kpis,  # Funktion zur Berechnung von Wasser-bezogenen KPIs
+        compute_product_wagon_stats,  # Funktion zur Berechnung von Statistiken pro Produkt und Wagen
+        compute_zone_duration_stats,  # Funktion zur Berechnung der Verweildauer in den Zonen
+        predict_production_energy,  # Funktion zur Vorhersage des Energiebedarfs
+        calculate_water_per_m3_formula,  # Funktion zur Berechnung des Wassergehalts pro Kubikmeter
+        get_product_water_curve,  # Funktion zur Ermittlung der Wasserkurve eines Produkts
+        WATER_PER_M3_KG,  # Konstante: Standardmenge an Wasser in kg pro m³
+        PRODUCT_SPECIFICATIONS,  # Dictionary mit den technischen Spezifikationen aller Produkte
+        SUSPENSION_KG,  # Konstante: Menge der Suspension in kg
+        CONFIG,  # Konfigurations-Dictionary (z.B. Sheet-Namen, Spalten-Indizes)
+        safe_divide,  # Hilfsfunktion für eine sichere Division (Vermeidung von Division durch Null)
+        PLATES_PER_WAGON,  # Konstante: Anzahl der Platten pro Wagen
     )
-except ImportError as e:
-    st.error(f"❌ Unable to import dryer_kpi_monthly_final module: {e}")
-    st.stop()
+except ImportError as e:  # Fängt den Fehler ab, falls der Import fehlschlägt
+    st.error(f"❌ Fehler beim Importieren des Moduls 'dryer_kpi_monthly_final': {e}")  # Zeigt eine Fehlermeldung in der App an
+    st.stop()  # Beendet die Ausführung der App bei einem Importfehler
 
 # ---------------------------------------------------------
-# German Number Formatting Functions
+# Funktionen für die deutsche Zahlenformatierung
 # ---------------------------------------------------------
 def format_german(value, decimals=2):
     """
@@ -47,46 +49,53 @@ def format_german(value, decimals=2):
         1234.56 -> "1.234,56"
         1234567.89 -> "1.234.567,89"
     """
-    if value is None:
-        return "–"
-    try:
-        if isinstance(value, float) and np.isnan(value):
-            return "–"
-        # Format with specified decimals using US style first
+    # Definiert eine Funktion zur Formatierung von Zahlen im deutschen Stil
+    if value is None:  # Prüft, ob der Wert None ist
+        return "–"  # Gibt einen Gedankenstrich zurück, wenn der Wert None ist
+    try:  # Beginnt einen Try-Block zur Fehlerbehandlung
+        if isinstance(value, float) and np.isnan(value):  # Prüft, ob der Wert ein NaN-Float ist
+            return "–"  # Gibt einen Gedankenstrich zurück, wenn der Wert NaN ist
+        # Formatiert den Wert zunächst im US-amerikanischen Stil mit Komma als Tausendertrennzeichen
         formatted = f"{value:,.{decimals}f}"
-        # Swap commas and dots: comma->X, dot->comma, X->dot
+        # Tauscht Kommas und Punkte, um das deutsche Format zu erhalten (Komma -> X, Punkt -> Komma, X -> Punkt)
         formatted = formatted.replace(",", "X").replace(".", ",").replace("X", ".")
-        return formatted
-    except (TypeError, ValueError):
-        return str(value)
+        return formatted  # Gibt den formatierten String zurück
+    except (TypeError, ValueError):  # Fängt Typ- oder Wertfehler ab
+        return str(value)  # Gibt den Wert als String zurück, falls die Formatierung fehlschlägt
 
 
 def format_german_int(value):
     """Format integer in German style (dot as thousands separator)"""
-    if value is None:
-        return "–"
-    try:
-        if isinstance(value, float) and np.isnan(value):
-            return "–"
+    # Definiert eine Funktion zur Formatierung von Ganzzahlen im deutschen Stil
+    if value is None:  # Prüft, ob der Wert None ist
+        return "–"  # Gibt einen Gedankenstrich zurück
+    try:  # Beginnt einen Try-Block zur Fehlerbehandlung
+        if isinstance(value, float) and np.isnan(value):  # Prüft, ob der Wert ein NaN-Float ist
+            return "–"  # Gibt einen Gedankenstrich zurück
+        # Formatiert als Ganzzahl mit Tausendertrennzeichen (z.B. 1,234)
         formatted = f"{int(value):,}"
+        # Ersetzt das Komma durch einen Punkt für das deutsche Format (z.B. 1.234)
         formatted = formatted.replace(",", ".")
-        return formatted
-    except (TypeError, ValueError):
-        return str(value)
+        return formatted  # Gibt den formatierten String zurück
+    except (TypeError, ValueError):  # Fängt Typ- oder Wertfehler ab
+        return str(value)  # Gibt den Wert als String zurück
 
 
 def format_german_pct(value, decimals=1):
     """Format percentage in German style"""
-    if value is None:
-        return "–"
-    try:
-        if isinstance(value, float) and np.isnan(value):
-            return "–"
+    # Definiert eine Funktion zur Formatierung von Prozentwerten im deutschen Stil
+    if value is None:  # Prüft, ob der Wert None ist
+        return "–"  # Gibt einen Gedankenstrich zurück
+    try:  # Beginnt einen Try-Block zur Fehlerbehandlung
+        if isinstance(value, float) and np.isnan(value):  # Prüft, ob der Wert ein NaN-Float ist
+            return "–"  # Gibt einen Gedankenstrich zurück
+        # Formatiert den Wert mit den angegebenen Dezimalstellen (z.B. 12.3)
         formatted = f"{value:.{decimals}f}"
+        # Ersetzt den Punkt durch ein Komma für das deutsche Format (z.B. 12,3)
         formatted = formatted.replace(".", ",")
-        return f"{formatted}%"
-    except (TypeError, ValueError):
-        return str(value)
+        return f"{formatted}%"  # Fügt das Prozentzeichen hinzu und gibt den String zurück
+    except (TypeError, ValueError):  # Fängt Typ- oder Wertfehler ab
+        return str(value)  # Gibt den Wert als String zurück
 
 
 def format_df_german(df, int_cols=None, float_cols=None, pct_cols=None, decimals=2):
@@ -94,47 +103,49 @@ def format_df_german(df, int_cols=None, float_cols=None, pct_cols=None, decimals
     Format DataFrame columns to German number format.
     Returns a copy with formatted string columns.
     """
-    df_display = df.copy()
+    # Definiert eine Funktion, um Spalten eines DataFrames im deutschen Stil zu formatieren
+    df_display = df.copy()  # Erstellt eine Kopie des DataFrames, um das Original nicht zu verändern
     
-    if int_cols:
-        for col in int_cols:
-            if col in df_display.columns:
-                df_display[col] = df_display[col].apply(format_german_int)
+    if int_cols:  # Wenn eine Liste von Ganzzahl-Spalten übergeben wurde
+        for col in int_cols:  # Geht jede Spalte in der Liste durch
+            if col in df_display.columns:  # Prüft, ob die Spalte im DataFrame existiert
+                df_display[col] = df_display[col].apply(format_german_int)  # Wendet die Formatierungsfunktion auf die Spalte an
     
-    if float_cols:
-        for col in float_cols:
-            if col in df_display.columns:
-                df_display[col] = df_display[col].apply(lambda x: format_german(x, decimals))
+    if float_cols:  # Wenn eine Liste von Fließkomma-Spalten übergeben wurde
+        for col in float_cols:  # Geht jede Spalte in der Liste durch
+            if col in df_display.columns:  # Prüft, ob die Spalte im DataFrame existiert
+                df_display[col] = df_display[col].apply(lambda x: format_german(x, decimals))  # Wendet die Formatierungsfunktion an
     
-    if pct_cols:
-        for col in pct_cols:
-            if col in df_display.columns:
-                df_display[col] = df_display[col].apply(format_german_pct)
+    if pct_cols:  # Wenn eine Liste von Prozent-Spalten übergeben wurde
+        for col in pct_cols:  # Geht jede Spalte in der Liste durch
+            if col in df_display.columns:  # Prüft, ob die Spalte im DataFrame existiert
+                df_display[col] = df_display[col].apply(format_german_pct)  # Wendet die Formatierungsfunktion an
     
-    return df_display
+    return df_display  # Gibt den formatierten DataFrame zurück
 
 
 # ---------------------------------------------------------
-# Streamlit page configuration & CSS
+# Streamlit-Seitenkonfiguration & CSS-Styling
 # ---------------------------------------------------------
-st.set_page_config(
-    page_title="Lindner Dryer KPI Dashboard",
-    page_icon="🏭",
-    layout="wide",
-    initial_sidebar_state="expanded",
+st.set_page_config(  # Konfiguriert die Einstellungen der Streamlit-Seite
+    page_title="Lindner Dryer KPI Dashboard",  # Titel des Browser-Tabs
+    page_icon="🏭",  # Icon des Browser-Tabs
+    layout="wide",  # Breites Layout für mehr Platz auf dem Bildschirm
+    initial_sidebar_state="expanded",  # Die Seitenleiste ist standardmäßig ausgeklappt
 )
 
+# Fügt benutzerdefiniertes CSS hinzu, um das Aussehen der App zu verbessern
 st.markdown(
     """
     <style>
-    .main-title {
+    .main-title { /* Stil für den Haupttitel */
         font-size: 36px;
         color: #003366;
         font-weight: 700;
         text-align: center;
         margin-bottom: 20px;
     }
-    .section-header {
+    .section-header { /* Stil für die Abschnittsüberschriften */
         color: #003366;
         font-size: 22px;
         font-weight: 600;
@@ -143,7 +154,7 @@ st.markdown(
         border-bottom: 2px solid #003366;
         padding-bottom: 6px;
     }
-    .metric-card {
+    .metric-card { /* Stil für die KPI-Karten */
         background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
         padding: 20px;
         border-radius: 15px;
@@ -151,23 +162,23 @@ st.markdown(
         box-shadow: 0 4px 15px rgba(0,0,0,0.2);
         color: white;
     }
-    .metric-card h3 { margin: 0; font-size: 16px; opacity: 0.9; }
-    .metric-card h2 { margin: 10px 0 0 0; font-size: 32px; font-weight: 700; }
-    .trockner-select {
+    .metric-card h3 { margin: 0; font-size: 16px; opacity: 0.9; } /* Stil für die Überschrift in der Karte */
+    .metric-card h2 { margin: 10px 0 0 0; font-size: 32px; font-weight: 700; } /* Stil für den Wert in der Karte */
+    .trockner-select { /* Stil für die Trockner-Auswahlbox */
         background-color: #e8f4f8;
         padding: 15px;
         border-radius: 10px;
         border: 2px solid #17a2b8;
         margin-bottom: 20px;
     }
-    .debug-box {
+    .debug-box { /* Stil für Debug-Boxen */
         background-color: #fff3cd;
         border: 1px solid #ffc107;
         border-radius: 5px;
         padding: 10px;
         margin: 5px 0;
     }
-    .filter-summary {
+    .filter-summary { /* Stil für die Zusammenfassung der Filter */
         background-color: #d4edda;
         border: 1px solid #28a745;
         border-radius: 10px;
@@ -176,17 +187,19 @@ st.markdown(
     }
     </style>
     """,
-    unsafe_allow_html=True,
+    unsafe_allow_html=True,  # Erlaubt die Ausführung von HTML/CSS
 )
 
 # ---------------------------------------------------------
-# Header
+# Header der Anwendung
 # ---------------------------------------------------------
+# Zeigt den Haupttitel mit dem definierten CSS-Stil an
 st.markdown(
     '<div class="main-title">🏭 Lindner – Dryer KPI Monitoring Dashboard</div>',
     unsafe_allow_html=True,
 )
 
+# Zeigt eine Informationsbox mit wichtigen Konstanten an
 st.info(
     f"📊 **Varun Solanki** | "
     f"Suspension: {format_german_int(SUSPENSION_KG)} kg | "
@@ -195,114 +208,131 @@ st.info(
 )
 
 # ---------------------------------------------------------
-# Sidebar
+# Seitenleiste (Sidebar) für Benutzereingaben
 # ---------------------------------------------------------
-with st.sidebar:
-    st.subheader("📁 Data Upload")
+with st.sidebar:  # Beginnt den Inhalt der Seitenleiste
+    st.subheader("📁 Data Upload")  # Überschrift für den Upload-Bereich
 
+    # Datei-Uploader für die Energiestammdaten
     energy_file = st.file_uploader(
         "📊 Energy File (.xlsx)",
-        type=["xlsx"],
-        key="energy_uploader"
+        type=["xlsx"],  # Erlaubt nur .xlsx Dateien
+        key="energy_uploader"  # Eindeutiger Schlüssel für das Widget
     )
+    # Datei-Uploader für die Hordenwagen-Stammdaten
     wagon_file = st.file_uploader(
         "🚛 Hordenwagen File (.xlsm, .xlsx)",
-        type=["xlsm", "xlsx"],
-        key="wagon_uploader"
+        type=["xlsm", "xlsx"],  # Erlaubt .xlsm und .xlsx Dateien
+        key="wagon_uploader"  # Eindeutiger Schlüssel für das Widget
     )
 
-    st.markdown("---")
-    st.subheader("⚙️ Filters")
+    st.markdown("---")  # Fügt eine Trennlinie hinzu
+    st.subheader("⚙️ Filters")  # Überschrift für den Filter-Bereich
     
     # ===== TROCKNER SELECTION (HIGHLIGHTED WITH RADIO BUTTONS) =====
+    # Beginnt einen speziell gestalteten Bereich für die Trockner-Auswahl
     st.markdown('<div class="trockner-select">', unsafe_allow_html=True)
     st.markdown("### 🏭 Select Trockner (Dryer)")
+    # Radio-Button für die Auswahl eines Trockners
     trockner_option = st.radio(
         "Choose dryer:",
-        options=["All", "A", "B"],
-        index=0,
-        horizontal=True,
+        options=["All", "A", "B"],  # Optionen: Alle, A, oder B
+        index=0,  # Standardmäßig "All" ausgewählt
+        horizontal=True,  # Zeigt die Optionen nebeneinander an
         help="Select which Trockner to analyze: A, B, or All (both)"
     )
-    if trockner_option == "All":
+    if trockner_option == "All":  # Wenn "Alle" ausgewählt ist
         st.info("📊 Analyzing data from **both Trockner A and B**")
-    else:
-        st.success(f"✅ Analyzing **Trockner {trockner_option} only**")
+    else:  # Wenn ein spezifischer Trockner ausgewählt ist
+        st.success(f"✅ Analyzing **Trockner {trockner_option}** only")
+    # Beendet den speziell gestalteten Bereich
     st.markdown('</div>', unsafe_allow_html=True)
 
+    # Multi-Select für die Produktfilterung
     products = st.multiselect(
         "🧱 Product(s):",
         ["L20", "L24", "L28", "L30", "L32", "L34", "L36", "L37", "L38", "L40", "L42", "L44", 
          "N24", "N30", "N34", "N36", "N38", "N40", "N42", "N44", 
-         "Y30", "Y34", "Y38", "Y44"],
-        default=["L28", "L30", "L32", "L34", "L36", "L38", "L40", "L42", "L44", 
+         "Y30", "Y34", "Y38", "Y44"],  # Liste aller verfügbaren Produkte
+        default=["L28", "L30", "L32", "L34", "L36", "L38", "L40", "L42", "L44",  # Standardmäßig ausgewählte Produkte
                  "N24", "N30", "N34", "N36", "N38", "N40", "N42", "N44", 
                  "Y30", "Y34", "Y38", "Y44"],
     )
 
+    # Zahlen-Eingabe für den Monatsfilter (0 bedeutet alle Monate)
     month = st.number_input(
         "📅 Month (0 = all):",
         min_value=0,
         max_value=12,
-        value=0,
+        value=0,  # Standardwert ist 0 (alle Monate)
     )
 
-    st.markdown("---")
+    st.markdown("---")  # Fügt eine Trennlinie hinzu
+    # Button zum Starten der Analyse
     run_button = st.button("▶️ Run Analysis", type="primary", use_container_width=True)
 
 
 # ---------------------------------------------------------
-# Helper functions
+# Hilfsfunktionen für die Darstellung und Verarbeitung
 # ---------------------------------------------------------
 def create_kpi_card(title: str, value, unit: str) -> str:
     """Create KPI card with German number formatting"""
-    if value is None:
-        text, unit_str = "–", ""
+    # Erstellt den HTML-Code für eine KPI-Karte mit deutscher Zahlenformatierung
+    if value is None:  # Wenn der Wert None ist
+        text, unit_str = "–", ""  # Setzt Text und Einheit auf leer
     else:
-        try:
-            if np.isnan(value):
-                text, unit_str = "–", ""
+        try:  # Beginnt einen Try-Block zur Fehlerbehandlung
+            if np.isnan(value):  # Wenn der Wert NaN ist
+                text, unit_str = "–", ""  # Setzt Text und Einheit auf leer
             else:
-                text = format_german(value, 2)
-                unit_str = f" {unit}"
-        except (TypeError, ValueError):
-            text, unit_str = str(value), f" {unit}"
+                text = format_german(value, 2)  # Formatiert den Wert
+                unit_str = f" {unit}"  # Fügt die Einheit hinzu
+        except (TypeError, ValueError):  # Bei Fehlern
+            text, unit_str = str(value), f" {unit}"  # Konvertiert zu String
+    # Erstellt den HTML-Code für die Karte mit den Werten
     return f'<div class="metric-card"><h3>{title}</h3><h2>{text}{unit_str}</h2></div>'
 
 
 def create_excel_download(results: dict) -> BytesIO:
-    output = BytesIO()
+    """Create an in-memory Excel file for download."""
+    # Erstellt eine Excel-Datei im Speicher zum Herunterladen
+    output = BytesIO()  # Erstellt einen In-Memory-Stream
+    # Verwendet pd.ExcelWriter mit dem xlsxwriter-Modul
     with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
-        for key, df in results.items():
-            if isinstance(df, pd.DataFrame) and not df.empty:
-                sheet_name = key.replace("_", " ").title()[:31]
-                df.to_excel(writer, sheet_name=sheet_name, index=False)
-    output.seek(0)
-    return output
+        for key, df in results.items():  # Geht durch alle Ergebnisse (DataFrames)
+            if isinstance(df, pd.DataFrame) and not df.empty:  # Wenn es ein gültiger, nicht-leerer DataFrame ist
+                sheet_name = key.replace("_", " ").title()[:31]  # Erstellt einen Sheet-Namen (max 31 Zeichen)
+                df.to_excel(writer, sheet_name=sheet_name, index=False)  # Schreibt den DataFrame in das Excel-Blatt
+    output.seek(0)  # Setzt den Zeiger des Streams zurück zum Anfang
+    return output  # Gibt den Stream zurück
 
 
 def save_uploaded_file(uploaded_file, suffix: str) -> str:
     """Safely save uploaded file to temporary location."""
+    # Speichert eine hochgeladene Datei sicher an einem temporären Ort
     try:
-        uploaded_file.seek(0)
-        file_bytes = uploaded_file.read()
+        uploaded_file.seek(0)  # Setzt den Dateizeiger zurück zum Anfang
+        file_bytes = uploaded_file.read()  # Liest den gesamten Inhalt der Datei
         
-        if len(file_bytes) == 0:
+        if len(file_bytes) == 0:  # Prüft, ob die Datei leer ist
             raise ValueError(f"Uploaded file '{uploaded_file.name}' is empty")
         
+        # Einfache Prüfung, ob es sich um eine Excel-Datei handelt (magische Zahl für ZIP-Dateien)
         if not file_bytes[:4] == b'PK\x03\x04':
             raise ValueError(
                 f"File '{uploaded_file.name}' does not appear to be a valid Excel file."
             )
         
+        # Erstellt eine temporäre Datei mit dem richtigen Suffix
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_file:
-            tmp_file.write(file_bytes)
-            tmp_path = tmp_file.name
+            tmp_file.write(file_bytes)  # Schreibt die Bytes in die temporäre Datei
+            tmp_path = tmp_file.name  # Speichert den Pfad zur temporären Datei
         
+        # Überprüft, ob die Datei korrekt geschrieben wurde
         if os.path.getsize(tmp_path) != len(file_bytes):
             raise ValueError("File was not written correctly to temporary storage")
         
-        return tmp_path
+        return tmp_path  # Gibt den Pfad zurück
         
     except Exception as e:
         raise ValueError(f"Error saving uploaded file: {e}")
@@ -310,59 +340,66 @@ def save_uploaded_file(uploaded_file, suffix: str) -> str:
 
 def validate_excel_file(file_path: str, file_description: str) -> bool:
     """Validate that an Excel file can be opened."""
+    # Validiert, dass eine Excel-Datei geöffnet werden kann
     try:
-        import openpyxl
-        wb = openpyxl.load_workbook(file_path, read_only=True, data_only=True)
-        wb.close()
-        return True
+        import openpyxl  # Importiert die Bibliothek hier, da sie nur für die Validierung benötigt wird
+        wb = openpyxl.load_workbook(file_path, read_only=True, data_only=True)  # Versucht, die Datei zu öffnen
+        wb.close()  # Schließt die Arbeitsmappe wieder
+        return True  # Gibt True zurück, wenn erfolgreich
     except Exception as e:
-        raise ValueError(f"Cannot read {file_description}: {e}")
+        raise ValueError(f"Cannot read {file_description}: {e}")  # Wirft einen Fehler mit Beschreibung
 
 
 def run_analysis(energy_path: str, wagon_path: str, products_filter, month_filter, trockner_filter) -> dict:
     """
     Run the complete KPI analysis with overlap period filtering.
     """
-    progress = st.progress(0)
-    status = st.empty()
+    # Führt die vollständige KPI-Analyse durch, inklusive Filterung nach Überlappungszeitraum
+    progress = st.progress(0)  # Initialisiert einen Fortschrittsbalken
+    status = st.empty()  # Erstellt einen Platzhalter für Statusmeldungen
     
-    debug_container = st.container()
+    debug_container = st.container()  # Erstellt einen Container für Debug-Informationen
 
     try:
         # ===== PARSE ENERGY =====
-        status.text("🔄 Parsing energy data...")
-        progress.progress(10)
+        status.text("🔄 Parsing energy data...")  # Zeigt Status an
+        progress.progress(10)  # Setzt den Fortschritt auf 10%
         
         try:
+            # Versucht, die Energie-Excel-Datei zu lesen
             e_raw = pd.read_excel(energy_path, sheet_name=CONFIG["energy_sheet"])
         except Exception as ex:
             try:
+                # Fallback: Versucht es mit einem anderen Engine
                 e_raw = pd.read_excel(energy_path, sheet_name=CONFIG["energy_sheet"], engine='openpyxl')
             except:
                 raise ValueError(f"Cannot read energy file: {ex}")
         
-        e = parse_energy(e_raw)
-        if e.empty:
+        e = parse_energy(e_raw)  # Verarbeitet die Rohdaten mit der importierten Funktion
+        if e.empty:  # Prüft, ob die verarbeiteten Daten leer sind
             raise ValueError("Parsed energy data is empty.")
         
+        # Berechnet den Zeitraum der Energiestammdaten
         energy_start = e["E_start"].min()
         energy_end = e["E_end"].max()
-        energy_hours_raw = len(e)
-        energy_thermal_raw = e["E_thermal_total_kWh"].sum()
-        energy_electrical_raw = e["E_el_kWh"].sum()
+        energy_hours_raw = len(e)  # Anzahl der Stunden in den Rohdaten
+        energy_thermal_raw = e["E_thermal_total_kWh"].sum()  # Summe der thermischen Energie
+        energy_electrical_raw = e["E_el_kWh"].sum()  # Summe der elektrischen Energie
 
         # ===== PARSE WAGON DATA =====
-        status.text("🔄 Parsing wagon tracking data...")
-        progress.progress(25)
+        status.text("🔄 Parsing wagon tracking data...")  # Zeigt Status an
+        progress.progress(25)  # Setzt den Fortschritt auf 25%
         
         try:
+            # Versucht, die Wagen-Excel-Datei zu lesen
             w_raw = pd.read_excel(
                 wagon_path,
                 sheet_name=CONFIG["wagon_sheet"],
-                header=CONFIG["wagon_header_row"],
+                header=CONFIG["wagon_header_row"],  # Verwendet die konfigurierte Kopfzeile
             )
         except Exception as ex:
             try:
+                # Fallback: Versucht es mit einem anderen Engine
                 w_raw = pd.read_excel(
                     wagon_path,
                     sheet_name=CONFIG["wagon_sheet"],
@@ -372,57 +409,64 @@ def run_analysis(energy_path: str, wagon_path: str, products_filter, month_filte
             except:
                 raise ValueError(f"Cannot read wagon file: {ex}")
         
-        raw_wagon_rows = len(w_raw)
+        raw_wagon_rows = len(w_raw)  # Anzahl der Zeilen in der Rohdatei
         
+        # Zeigt Debug-Informationen zur Rohdatei an
         with debug_container:
             with st.expander("🔧 DEBUG 1: Raw Wagon File Analysis", expanded=False):
                 st.write(f"**Total rows in raw file:** {format_german_int(raw_wagon_rows)}")
                 st.write(f"**Total columns:** {len(w_raw.columns)}")
                 
-                col_list = list(w_raw.columns)[:20]
+                col_list = list(w_raw.columns)[:20]  # Zeigt die ersten 20 Spaltennamen
                 st.write("**First 20 columns:**")
                 for i, col in enumerate(col_list):
-                    st.code(f"[{i:2d}] {repr(col)}")
+                    st.code(f"[{i:2d}] {repr(col)}")  # Zeigt den Spaltennamen und Index
         
         # ===== APPLY TROCKNER FILTER =====
-        status.text(f"🔄 Parsing wagon data (Trockner: {trockner_filter})...")
-        progress.progress(35)
+        status.text(f"🔄 Parsing wagon data (Trockner: {trockner_filter})...")  # Zeigt Status an
+        progress.progress(35)  # Setzt den Fortschritt auf 35%
         
+        # Bestimmt, welcher Trockner-Filter angewendet werden soll
         trockner_to_use = trockner_filter if trockner_filter != "All" else None
-        w = parse_wagon(w_raw, trockner=trockner_to_use)
+        w = parse_wagon(w_raw, trockner=trockner_to_use)  # Wendet den Parser mit dem Filter an
         
-        if w.empty:
+        if w.empty:  # Prüft, ob nach dem Filter noch Daten vorhanden sind
             raise ValueError("Parsed wagon data is empty after Trockner filter.")
         
-        wagon_count_after_trockner = len(w)
-        volume_after_trockner = w["m3"].sum()
-        applied_trockner = trockner_to_use or "All"
+        wagon_count_after_trockner = len(w)  # Anzahl der Wagen nach dem Filter
+        volume_after_trockner = w["m3"].sum()  # Volumen nach dem Filter
+        applied_trockner = trockner_to_use or "All"  # Der tatsächlich angewendete Filter
         
+        # Zeigt Debug-Informationen nach dem Trockner-Filter an
         with debug_container:
             with st.expander("🔧 DEBUG 2: After Trockner Filter", expanded=False):
                 st.write(f"**Trockner filter:** {applied_trockner}")
                 st.write(f"**Rows after filter:** {format_german_int(wagon_count_after_trockner)}")
                 st.write(f"**Volume after filter:** {format_german(volume_after_trockner, 2)} m³")
                 
-                if "Trockner" in w.columns:
+                if "Trockner" in w.columns:  # Wenn die Spalte 'Trockner' existiert
                     st.write("**Trockner values:**")
-                    st.write(w["Trockner"].value_counts())
+                    st.write(w["Trockner"].value_counts())  # Zeigt die Verteilung der Trockner
         
         # ===== CALCULATE AND APPLY OVERLAP FILTER =====
-        status.text("🔄 Calculating overlap period...")
-        progress.progress(40)
+        status.text("🔄 Calculating overlap period...")  # Zeigt Status an
+        progress.progress(40)  # Setzt den Fortschritt auf 40%
         
+        # Berechnet den Zeitraum der Wagen-Stammdaten
         wagon_start = w["t0"].min()
         wagon_end = w["t0"].max()
         
+        # Bestimmt den Überlappungszeitraum zwischen Energie- und Wagen-Daten
         overlap_start = max(energy_start, wagon_start)
         overlap_end = min(energy_end, wagon_end)
-        overlap_days = (overlap_end - overlap_start).days
+        overlap_days = (overlap_end - overlap_start).days  # Dauer des Überlappungs in Tagen
         
+        # Speichert die Werte vor dem Filtern zur späteren Anzeige
         wagons_before_overlap = len(w)
         volume_before_overlap = w["m3"].sum()
         energy_hours_before_overlap = len(e)
         
+        # Zeigt kritische Informationen zum Zeitraum an
         with debug_container:
             with st.expander("📅 TIME PERIOD OVERLAP - CRITICAL", expanded=True):
                 st.markdown("### ⏰ Date Range Analysis")
@@ -457,22 +501,27 @@ def run_analysis(energy_path: str, wagon_path: str, products_filter, month_filte
                 st.info("⚠️ Only data within this overlap period is used for all KPI calculations!")
         
         # ===== FILTER WAGONS TO OVERLAP PERIOD =====
-        status.text("🔄 Filtering wagons to overlap period...")
-        progress.progress(45)
+        status.text("🔄 Filtering wagons to overlap period...")  # Zeigt Status an
+        progress.progress(45)  # Setzt den Fortschritt auf 45%
         
+        # Filtert den Wagen-DataFrame auf den Überlappungszeitraum
         w = w[(w["t0"] >= overlap_start) & (w["t0"] <= overlap_end)].copy()
         
+        # Berechnet die Werte nach dem Filtern
         wagons_after_overlap = len(w)
         volume_after_overlap = w["m3"].sum()
         wagons_removed_overlap = wagons_before_overlap - wagons_after_overlap
         volume_removed_overlap = volume_before_overlap - volume_after_overlap
         
+        # Filtert auch den Energie-DataFrame auf den Überlappungszeitraum
         e = e[(e["E_start"] >= overlap_start) & (e["E_end"] <= overlap_end)].copy()
         
+        # Berechnet die Energiewerte nach dem Filtern
         energy_hours_after_overlap = len(e)
         energy_thermal_after_overlap = e["E_thermal_total_kWh"].sum()
         energy_electrical_after_overlap = e["E_el_kWh"].sum()
         
+        # Zeigt Debug-Informationen nach dem Überlappungs-Filter an
         with debug_container:
             with st.expander("🔧 DEBUG 3: After Overlap Filter", expanded=True):
                 st.markdown("### 🚛 Wagon Data")
@@ -503,32 +552,35 @@ def run_analysis(energy_path: str, wagon_path: str, products_filter, month_filte
                     st.write(f"Thermal after overlap: {format_german_int(energy_thermal_after_overlap)} kWh")
                     st.write(f"Electrical after overlap: {format_german_int(energy_electrical_after_overlap)} kWh")
         
-        if w.empty:
+        if w.empty:  # Prüft, ob nach dem Filter noch Wagen-Daten vorhanden sind
             raise ValueError("No wagon data within the overlap period!")
         
-        if e.empty:
+        if e.empty:  # Prüft, ob nach dem Filter noch Energie-Daten vorhanden sind
             raise ValueError("No energy data within the overlap period!")
         
         wagon_count_after_overlap = len(w)
         volume_after_overlap_filter = w["m3"].sum()
         
         # ===== APPLY PRODUCT FILTER =====
-        status.text("🔄 Applying product filters...")
-        progress.progress(50)
+        status.text("🔄 Applying product filters...")  # Zeigt Status an
+        progress.progress(50)  # Setzt den Fortschritt auf 50%
         
+        # Speichert Werte vor dem Filtern
         wagon_count_before_product_filter = len(w)
         volume_before_product_filter = w["m3"].sum()
         
-        w_before_product_filter = w.copy()
+        w_before_product_filter = w.copy() # Kopie für spätere Vergleiche
         
-        if products_filter:
-            w = w[w["Produkt"].astype(str).isin(products_filter)]
-            if w.empty:
+        if products_filter:  # Wenn ein Produktfilter gesetzt ist
+            w = w[w["Produkt"].astype(str).isin(products_filter)]  # Wendet den Filter an
+            if w.empty:  # Prüft, ob nach dem Filter noch Daten vorhanden sind
                 raise ValueError(f"No wagon records found for selected products: {products_filter}")
         
+        # Berechnet die Werte nach dem Filtern
         wagon_count_after_product_filter = len(w)
         volume_after_product_filter = w["m3"].sum()
         
+        # Zeigt Debug-Informationen nach dem Produkt-Filter an
         with debug_container:
             with st.expander("🔧 DEBUG 4: After Product Filter", expanded=False):
                 st.write(f"**Product filter:** {products_filter}")
@@ -537,28 +589,32 @@ def run_analysis(energy_path: str, wagon_path: str, products_filter, month_filte
                 st.write(f"**Rows removed:** {format_german_int(wagon_count_before_product_filter - wagon_count_after_product_filter)}")
                 st.write(f"**Volume before:** {format_german(volume_before_product_filter, 2)} m³")
                 st.write(f"**Volume after:** {format_german(volume_after_product_filter, 2)} m³")
-        
+
+        # Berechnet die Gesamtanzahl und das Gesamtvolumen nach allen Filtern
         total_wagons = len(w)
         total_volume = w["m3"].sum()
         
-        status.text(f"📊 Found {format_german_int(total_wagons)} wagon rows with {format_german(total_volume, 2)} m³ total volume")
+        status.text(f"📊 Found {format_german_int(total_wagons)} wagon rows with {format_german(total_volume, 2)} m³ total volume")  # Zeigt Status an
 
         # ===== APPLY MONTH FILTER =====
-        status.text("🔄 Applying month filter...")
-        progress.progress(55)
+        status.text("🔄 Applying month filter...")  # Zeigt Status an
+        progress.progress(55)  # Setzt den Fortschritt auf 55%
         
+        # Speichert Werte vor dem Filtern
         wagon_count_before_month_filter = len(w)
         volume_before_month_filter = w["m3"].sum()
         
-        if month_filter:
-            e = e[e["Month"] == month_filter]
-            w = w[w["Month"] == month_filter]
-            if e.empty or w.empty:
+        if month_filter:  # Wenn ein Monatsfilter gesetzt ist
+            e = e[e["Month"] == month_filter]  # Wendet den Filter auf die Energiestammdaten an
+            w = w[w["Month"] == month_filter]  # Wendet den Filter auf die Wagen-Stammdaten an
+            if e.empty or w.empty:  # Prüft, ob nach dem Filter noch Daten vorhanden sind
                 raise ValueError(f"No data found for month = {month_filter}.")
         
+        # Berechnet die Werte nach dem Filtern
         wagon_count_after_month_filter = len(w)
         volume_after_month_filter = w["m3"].sum()
         
+        # Zeigt Debug-Informationen nach dem Monats-Filter an
         with debug_container:
             with st.expander("🔧 DEBUG 5: After Month Filter", expanded=False):
                 st.write(f"**Month filter:** {month_filter or 'None (all months)'}")
@@ -568,13 +624,14 @@ def run_analysis(energy_path: str, wagon_path: str, products_filter, month_filte
                 st.write(f"**Volume after:** {format_german(volume_after_month_filter, 2)} m³")
 
         # ===== BUILD INTERVALS =====
-        status.text("🔄 Building zone intervals...")
-        progress.progress(65)
+        status.text("🔄 Building zone intervals...")  # Zeigt Status an
+        progress.progress(65)  # Setzt den Fortschritt auf 65%
         
-        ivals = explode_intervals(w)
-        if ivals.empty:
+        ivals = explode_intervals(w)  # Erstellt die Intervalle für jede Wagen-Zonen-Kombination
+        if ivals.empty:  # Prüft, ob Intervalle erstellt werden konnten
             raise ValueError("Zone intervals could not be created.")
         
+        # Zeigt Debug-Informationen zu den Intervallen an
         with debug_container:
             with st.expander("🔧 DEBUG 6: Zone Intervals", expanded=False):
                 st.write(f"**Total intervals:** {format_german_int(len(ivals))}")
@@ -583,22 +640,26 @@ def run_analysis(energy_path: str, wagon_path: str, products_filter, month_filte
                 st.write(ivals.groupby("Zone").size())
 
         # ===== ALLOCATE ENERGY =====
-        status.text("🔄 Allocating energy to products...")
-        progress.progress(80)
+        status.text("🔄 Allocating energy to products...")  # Zeigt Status an
+        progress.progress(80)  # Setzt den Fortschritt auf 80%
         
+        # Weist die Energiestunden den Wagen-Intervallen zu
         alloc = allocate_energy(e, ivals, full_electrical_kwh=energy_electrical_raw)
         
         # ===== COMPUTE ZONE DURATION STATS =====
-        status.text("🔄 Computing zone duration statistics...")
-        progress.progress(85)
+        status.text("🔄 Computing zone duration statistics...")  # Zeigt Status an
+        progress.progress(85)  # Setzt den Fortschritt auf 85%
         
         try:
+            # Berechnet die Statistiken für die Verweildauer in den Zonen
             zone_overall_stats, zone_product_stats = compute_zone_duration_stats(w)
         except Exception as ex:
+            # Bei Fehlern setzt die Statistiken auf leere DataFrames
             zone_overall_stats = pd.DataFrame()
             zone_product_stats = pd.DataFrame()
             print(f"Zone stats error: {ex}")
-        
+      
+        # Fügt Wochen- und Jahresinformationen für spätere Analysen hinzu
         if "Z2_in" in w.columns and w["Z2_in"].notna().any():
             w["Week_Energy"] = w["Z2_in"].dt.isocalendar().week
             w["Year_Energy"] = w["Z2_in"].dt.year
@@ -606,9 +667,10 @@ def run_analysis(energy_path: str, wagon_path: str, products_filter, month_filte
             w["Week_Energy"] = w["t0"].dt.isocalendar().week
             w["Year_Energy"] = w["t0"].dt.year
       
-        if alloc.empty:
+        if alloc.empty:  # Prüft, ob die Energiezuweisung erfolgreich war
             raise ValueError("Energy allocation result is empty.")
         
+        # Zeigt Debug-Informationen zur Energiezuweisung an
         with debug_container:
             with st.expander("🔧 DEBUG 7: Energy Allocation Results", expanded=False):
                 st.write(f"**Allocation records:** {format_german_int(len(alloc))}")
@@ -617,9 +679,10 @@ def run_analysis(energy_path: str, wagon_path: str, products_filter, month_filte
                 st.write(f"**Total allocated:** {format_german_int(alloc['Energy_share_kWh'].sum())} kWh")
 
         # ===== AGGREGATE KPIs =====
-        status.text("🔄 Aggregating KPIs...")
-        progress.progress(90)
+        status.text("🔄 Aggregating KPIs...")  # Zeigt Status an
+        progress.progress(90)  # Setzt den Fortschritt auf 90%
 
+        # Aggregiert die Daten nach Monat, Produkt und Zone
         summary = alloc.groupby(["Month", "Produkt", "Zone"], as_index=False).agg(
             Energy_thermal_kWh=("Energy_thermal_kWh", "sum"),
             Energy_electrical_kWh=("Energy_electrical_kWh", "sum"),
@@ -627,6 +690,7 @@ def run_analysis(energy_path: str, wagon_path: str, products_filter, month_filte
             Volume_m3=("m3", "sum"),
         )
 
+        # Berechnet die spezifischen KPIs pro m³
         summary["kWh_thermal_per_m3"] = np.where(
             summary["Volume_m3"] > 0,
             summary["Energy_thermal_kWh"] / summary["Volume_m3"],
@@ -637,9 +701,10 @@ def run_analysis(energy_path: str, wagon_path: str, products_filter, month_filte
             summary["Energy_kWh"] / summary["Volume_m3"],
             0
         )
-        summary = add_water_kpis(summary)
-        summary = summary.fillna(0)
+        summary = add_water_kpis(summary)  # Fügt Wasser-bezogene KPIs hinzu
+        summary = summary.fillna(0)  # Ersetzt NaN-Werte durch 0
 
+        # Aggregiert die Daten nach Produkt und Zone (jährlich)
         yearly = summary.groupby(["Produkt", "Zone"], as_index=False).agg(
             Energy_thermal_kWh=("Energy_thermal_kWh", "sum"),
             Energy_electrical_kWh=("Energy_electrical_kWh", "sum"),
@@ -648,6 +713,7 @@ def run_analysis(energy_path: str, wagon_path: str, products_filter, month_filte
             Water_kg=("Water_kg", "sum"),
         )
 
+        # Berechnet die spezifischen KPIs für die jährliche Ansicht
         yearly["kWh_thermal_per_m3"] = np.where(
             yearly["Volume_m3"] > 0,
             yearly["Energy_thermal_kWh"] / yearly["Volume_m3"],
@@ -668,8 +734,9 @@ def run_analysis(energy_path: str, wagon_path: str, products_filter, month_filte
             yearly["Energy_kWh"] / yearly["Water_kg"],
             0
         )
-        yearly = yearly.fillna(0)
+        yearly = yearly.fillna(0)  # Ersetzt NaN-Werte durch 0
 
+        # Aggregiert die Daten nach Monat und Produkt
         product_totals = summary.groupby(["Month", "Produkt"], as_index=False).agg(
             Energy_thermal_kWh=("Energy_thermal_kWh", "sum"),
             Energy_electrical_kWh=("Energy_electrical_kWh", "sum"),
@@ -678,6 +745,7 @@ def run_analysis(energy_path: str, wagon_path: str, products_filter, month_filte
             Water_kg=("Water_kg", "sum"),
         )
 
+        # Berechnet die spezifischen KPIs für die Produkt-Totals
         product_totals["kWh_thermal_per_m3"] = np.where(
             product_totals["Volume_m3"] > 0,
             product_totals["Energy_thermal_kWh"] / product_totals["Volume_m3"],
@@ -698,11 +766,12 @@ def run_analysis(energy_path: str, wagon_path: str, products_filter, month_filte
             product_totals["Energy_kWh"] / product_totals["Water_kg"],
             0
         )
-        product_totals = product_totals.fillna(0)
+        product_totals = product_totals.fillna(0)  # Ersetzt NaN-Werte durch 0
 
-        progress.progress(100)
-        status.text("✅ Analysis complete!")
+        progress.progress(100)  # Setzt Fortschritt auf 100%
+        status.text("✅ Analysis complete!")  # Zeigt Erfolgsmeldung
 
+        # Gibt ein Dictionary mit allen berechneten Ergebnissen und Zwischenschritten zurück
         return {
             "energy": e,
             "wagons": w,
@@ -749,64 +818,77 @@ def run_analysis(energy_path: str, wagon_path: str, products_filter, month_filte
             "zone_product_stats": zone_product_stats,
         }
 
-    finally:
+    finally:  # Dieser Block wird immer ausgeführt, auch bei Fehlern
         import time
-        time.sleep(0.4)
-        progress.empty()
-        status.empty()
+        time.sleep(0.4)  # Kurze Pause, damit der Benutzer den Status sehen kann
+        progress.empty()  # Entfernt den Fortschrittsbalken
+        status.empty()  # Entfernt die Statusmeldung
 
 
 # ---------------------------------------------------------
-# Session state
+# Session State Management (Verwendung von zwischengespeicherten Daten)
 # ---------------------------------------------------------
+# Prüft, ob 'results' bereits im Session State von Streamlit vorhanden ist
 if "results" not in st.session_state:
-    st.session_state.results = None
+    st.session_state.results = None  # Initialisiert es als None, wenn nicht vorhanden
+# Prüft, ob 'analysis_complete' bereits im Session State vorhanden ist
 if "analysis_complete" not in st.session_state:
-    st.session_state.analysis_complete = False
+    st.session_state.analysis_complete = False  # Initialisiert es als False, wenn nicht vorhanden
 
+# Prüft, ob sich die hochgeladenen Dateien oder der Trockner-Filter geändert haben
 if energy_file and wagon_file:
+    # Erstellt einen Tupel der aktuellen Dateien/Filter als Referenz
     current_files = (energy_file.name, wagon_file.name, trockner_option)
+    # Prüft, ob 'last_files' bereits im Session State vorhanden ist
     if "last_files" not in st.session_state:
-        st.session_state.last_files = current_files
+        st.session_state.last_files = current_files  # Speichert den aktuellen Zustand
+    # Prüft, ob sich der Zustand seit dem letzten Mal geändert hat
     elif st.session_state.last_files != current_files:
-        st.session_state.results = None
-        st.session_state.analysis_complete = False
-        st.session_state.last_files = current_files
+        st.session_state.results = None  # Setzt die Ergebnisse zurück, um eine neue Analyse zu erzwingen
+        st.session_state.analysis_complete = False  # Setzt den Status auf 'nicht abgeschlossen'
+        st.session_state.last_files = current_files  # Speichert den neuen Zustand
 
 # ---------------------------------------------------------
-# Run Button
+# Logik, die beim Klick auf den "Run Analysis"-Button ausgeführt wird
 # ---------------------------------------------------------
-if run_button:
+if run_button:  # Wenn der Button geklickt wurde
+    # Prüft, ob beide Dateien hochgeladen wurden
     if not energy_file or not wagon_file:
         st.error("⚠️ Please upload both Energy and Hordenwagen files.")
-    else:
-        tmp_e = tmp_w = None
+    else:  # Wenn beide Dateien vorhanden sind
+        tmp_e = tmp_w = None  # Initialisiert die Pfade für die temporären Dateien
         try:
+            # Zeigt Informationen zu den hochgeladenen Dateien an
             st.info(f"📄 Energy file: {energy_file.name} ({format_german_int(energy_file.size)} bytes)")
             st.info(f"📄 Wagon file: {wagon_file.name} ({format_german_int(wagon_file.size)} bytes)")
             st.info(f"🏭 Trockner filter: **{trockner_option}**")
             
+            # Speichert die hochgeladenen Dateien temporär ab
             with st.spinner("📁 Saving uploaded files..."):
-                tmp_e = save_uploaded_file(energy_file, ".xlsx")
-                wagon_suffix = ".xlsm" if wagon_file.name.endswith(".xlsm") else ".xlsx"
-                tmp_w = save_uploaded_file(wagon_file, wagon_suffix)
+                tmp_e = save_uploaded_file(energy_file, ".xlsx")  # Speichert Energie-Datei
+                wagon_suffix = ".xlsm" if wagon_file.name.endswith(".xlsm") else ".xlsx"  # Bestimmt das Suffix
+                tmp_w = save_uploaded_file(wagon_file, wagon_suffix)  # Speichert Wagen-Datei
             
+            # Validiert die Excel-Dateien
             with st.spinner("🔍 Validating Excel files..."):
-                validate_excel_file(tmp_e, "Energy file")
-                validate_excel_file(tmp_w, "Wagon file")
+                validate_excel_file(tmp_e, "Energy file")  # Validiert Energie-Datei
+                validate_excel_file(tmp_w, "Wagon file")  # Validiert Wagen-Datei
             
+            # Führt die Hauptanalyse durch
             results = run_analysis(
-                tmp_e,
-                tmp_w,
-                products if products else None,
-                month if month != 0 else None,
-                trockner_option
+                tmp_e,  # Pfad zur temporären Energie-Datei
+                tmp_w,  # Pfad zur temporären Wagen-Datei
+                products if products else None,  # Produktfilter
+                month if month != 0 else None,  # Monatsfilter
+                trockner_option  # Trockner-Filter
             )
+            # Speichert die Ergebnisse im Session State
             st.session_state.results = results
-            st.session_state.analysis_complete = True
+            st.session_state.analysis_complete = True  # Markiert die Analyse als abgeschlossen
 
-        except ValueError as ve:
+        except ValueError as ve:  # Behandelt Validierungsfehler
             st.error(f"⚠️ Validation Error: {ve}")
+            # Gibt Tipps zur Fehlerbehebung
             st.warning(
                 "💡 **Troubleshooting Tips:**\n"
                 "1. Try re-downloading the original Excel file\n"
@@ -814,37 +896,42 @@ if run_button:
                 "3. Ensure the file is not password protected\n"
                 "4. Check if the file opens correctly on your computer"
             )
-            st.session_state.results = None
-            st.session_state.analysis_complete = False
+            st.session_state.results = None  # Setzt Ergebnisse zurück
+            st.session_state.analysis_complete = False  # Markiert als nicht abgeschlossen
             
-        except Exception as err:
+        except Exception as err:  # Behandelt alle anderen Fehler
             st.error(f"❌ Error during analysis: {err}")
+            # Bietet die Möglichkeit, den Fehler-Trace anzusehen
             with st.expander("🔍 View Error Details"):
                 st.exception(err)
-            st.session_state.results = None
-            st.session_state.analysis_complete = False
+            st.session_state.results = None  # Setzt Ergebnisse zurück
+            st.session_state.analysis_complete = False  # Markiert als nicht abgeschlossen
 
-        finally:
+        finally:  # Dieser Block wird immer ausgeführt
+            # Löscht die temporären Dateien, um Speicherplatz freizugeben
             for p in (tmp_e, tmp_w):
-                if p and os.path.exists(p):
+                if p and os.path.exists(p):  # Wenn der Pfad existiert
                     try:
-                        os.unlink(p)
+                        os.unlink(p)  # Löscht die Datei
                     except Exception:
-                        pass
+                        pass  # Ignoriert Fehler beim Löschen
 
 # ---------------------------------------------------------
-# Display Results
+# Anzeige der Ergebnisse (nur wenn die Analyse abgeschlossen ist)
 # ---------------------------------------------------------
+# Prüft, ob die Analyse abgeschlossen ist und Ergebnisse vorhanden sind
 if st.session_state.analysis_complete and st.session_state.results:
     try:
+        # Lädt die Ergebnisse aus dem Session State
         results = st.session_state.results
-        summary = results["summary"]
-        yearly = results["yearly"]
-        product_totals = results.get("product_totals")
-        wagons_df = results["wagons"]
+        summary = results["summary"]  # Monatliche Zusammenfassung
+        yearly = results["yearly"]  # Jährliche Zusammenfassung
+        product_totals = results.get("product_totals")  # Produkt-Totals
+        wagons_df = results["wagons"]  # Gefilterte Wagen-Stammdaten
         
-        applied_trockner = results.get("applied_trockner", "All")
+        applied_trockner = results.get("applied_trockner", "All")  # Angewendeter Trockner-Filter
         
+        # Lädt die Werte für die Filter-Pipeline-Zusammenfassung
         raw_rows = results.get("raw_wagon_file_rows", 0)
         count_after_trockner = results.get("wagon_count_after_trockner", 0)
         count_after_product = results.get("wagon_count_after_product_filter", 0)
@@ -852,14 +939,16 @@ if st.session_state.analysis_complete and st.session_state.results:
         products_applied = results.get("products_filter_applied", [])
         month_applied = results.get("month_filter_applied", None)
 
-        if summary.empty:
+        if summary.empty:  # Prüft, ob nach dem Filtern noch Daten vorhanden sind
             st.warning("⚠️ No data available after filtering.")
         else:
             # ============================================================
             #   FILTER PIPELINE SUMMARY
             # ============================================================
+            # Zeigt eine Überschrift für den Abschnitt an
             st.markdown('<div class="section-header">🔍 Filter Pipeline Summary</div>', unsafe_allow_html=True)
             
+            # Zeigt Metriken für jeden Schritt des Filter-Prozesses an
             col_fp1, col_fp2, col_fp3, col_fp4 = st.columns(4)
             
             with col_fp1:
@@ -880,10 +969,11 @@ if st.session_state.analysis_complete and st.session_state.results:
                          delta=format_german_int(delta_month) if delta_month != 0 else None,
                          delta_color="inverse")
             
+            # Zeigt eine Zusammenfassung der aktiven Filter an
             filter_parts = []
             if applied_trockner != "All":
                 filter_parts.append(f"🏭 Trockner: **{applied_trockner}**")
-            if products_applied and len(products_applied) < 12:
+            if products_applied and len(products_applied) < 12: # Nur anzeigen, wenn nicht alle Produkte ausgewählt sind
                 filter_parts.append(f"🧱 Products: **{len(products_applied)}/12** selected")
             if month_applied:
                 filter_parts.append(f"📅 Month: **{month_applied}**")
@@ -896,16 +986,19 @@ if st.session_state.analysis_complete and st.session_state.results:
             # ============================================================
             #   WAGON AND VOLUME CALCULATION
             # ============================================================
+            # Berechnet die finalen Produktionskennzahlen
             total_wagons = len(wagons_df)
             total_volume = wagons_df["m3"].sum()
             avg_volume_per_wagon = wagons_df["m3"].mean()
             unique_wagon_numbers = wagons_df["WG_Nr"].nunique()
 
             # ===== ENERGY TOTALS =====
+            # Berechnet die Gesamtenergiewerte aus den aggregierten Daten
             total_thermal = float(yearly["Energy_thermal_kWh"].sum())
             total_electrical = float(yearly["Energy_electrical_kWh"].sum())
             total_energy = float(yearly["Energy_kWh"].sum())
             
+            # Korrektur für elektrische Energie, falls die Zuweisung fehlschlug
             expected_electrical = results.get("energy_electrical_raw", 0)
             st.write(f"DEBUG: total_electrical={format_german_int(total_electrical)}, expected={format_german_int(expected_electrical)}")
             
@@ -915,23 +1008,25 @@ if st.session_state.analysis_complete and st.session_state.results:
                 total_energy = total_thermal + total_electrical
 
             # ===== WATER CALCULATION =====
+            # Berechnet die Wassermenge für jedes Produkt
             product_volume_all = wagons_df.groupby("Produkt")["m3"].sum().reset_index()
             
             water_calc_details = []
             total_water = 0.0
             
+            # Geht durch jedes Produkt und berechnet die Wassermenge basierend auf den Spezifikationen
             for _, row in product_volume_all.iterrows():
                 prod = row["Produkt"]
                 vol = row["m3"]
                 wagon_count_prod = len(wagons_df[wagons_df["Produkt"] == prod])
                 
-                if prod in PRODUCT_SPECIFICATIONS:
+                if prod in PRODUCT_SPECIFICATIONS:  # Wenn das Produkt in den Spezifikationen definiert ist
                     spec = PRODUCT_SPECIFICATIONS[prod]
                     water_per_mm_g = spec["slope"] * SUSPENSION_KG + spec["intercept"]
                     water_per_plate_kg = (water_per_mm_g * spec["pressed_thickness_mm"]) / 1000.0
                     water_per_m3 = water_per_plate_kg / spec["volume_m3"]
                     water_kg = vol * water_per_m3
-                else:
+                else:  # Fallback auf Standardwert
                     water_per_m3 = WATER_PER_M3_KG.get(prod, 180.0)
                     water_kg = vol * water_per_m3
                     water_per_mm_g = 0
@@ -948,11 +1043,13 @@ if st.session_state.analysis_complete and st.session_state.results:
                 })
 
             # ===== KPI CALCULATIONS =====
+            # Berechnet die durchschnittlichen KPIs
             avg_kwh_per_m3 = safe_divide(total_energy, total_volume)
             avg_kwh_thermal_per_m3 = safe_divide(total_thermal, total_volume)
             avg_kwh_per_kg = safe_divide(total_energy, total_water)
             avg_kwh_thermal_per_kg = safe_divide(total_thermal, total_water)
 
+            # Berechnet die prozentualen Anteile von thermischer und elektrischer Energie
             thermal_pct = (total_thermal / total_energy * 100) if total_energy > 0 else 0
             electrical_pct = (total_electrical / total_energy * 100) if total_energy > 0 else 0
 
@@ -961,6 +1058,7 @@ if st.session_state.analysis_complete and st.session_state.results:
             # ============================================================
             #                 TROCKNER INFO BANNER
             # ============================================================
+            # Zeigt eine Info-Box an, welcher Trockner analysiert wird
             if applied_trockner != "All":
                 st.success(f"🏭 **Showing data for Trockner {applied_trockner} only** | After all filters: **{format_german_int(total_wagons)}** rows")
             else:
@@ -969,8 +1067,10 @@ if st.session_state.analysis_complete and st.session_state.results:
                          # ============================================================
             #                     SUMMARY KPIs SECTION
             # ============================================================
+            # Zeigt eine Überschrift für den Abschnitt an
             st.markdown('<div class="section-header">📈 Summary KPIs</div>', unsafe_allow_html=True)
 
+            # Zeigt KPIs zur Produktion an
             st.subheader("🏭 Production")
             c1, c2, c3 = st.columns(3)
 
@@ -981,6 +1081,7 @@ if st.session_state.analysis_complete and st.session_state.results:
             with c3:
                 st.markdown(f'<div class="metric-card"><h3>Total Water Evaporated(in kg) </h3><h2>{format_german(total_water, 0)} kg</h2></div>', unsafe_allow_html=True)
    
+            # Zeigt KPIs zum Energieverbrauch an
             st.subheader("⚡ Energy Consumption")
             c5, c6, c7 = st.columns(3)
 
@@ -991,6 +1092,7 @@ if st.session_state.analysis_complete and st.session_state.results:
             with c7:
                 st.markdown(f'<div class="metric-card"><h3>Total Energy</h3><h2>{format_german(total_energy, 0)} kWh</h2></div>', unsafe_allow_html=True)
 
+            # Zeigt KPIs zur Energieeffizienz an
             st.subheader("📊 Energy Efficiency")
             c8, c9, c10, c11 = st.columns(4)
 
@@ -1004,8 +1106,7 @@ if st.session_state.analysis_complete and st.session_state.results:
                 st.markdown(f'<div class="metric-card"><h3>Thermal kWh/m³</h3><h2>{format_german(avg_kwh_thermal_per_m3, 1)} kWh/m³</h2></div>', unsafe_allow_html=True)
                 
 
-
-            # ===== INFO BOX =====
+            # Zeigt eine Info-Box mit einer Zusammenfassung der wichtigsten KPIs an
             st.info(
                 f"🏭 **Trockner {applied_trockner}** | "
                 f"⚡ **Energy Mix:** Thermal = **{format_german(thermal_pct, 1)}%** ({format_german_int(total_thermal)} kWh) | "
@@ -1017,6 +1118,7 @@ if st.session_state.analysis_complete and st.session_state.results:
             # ============================================================
             #    DEBUG: FINAL VERIFICATION SECTION
             # ============================================================
+            # Zeigt einen ausklappbaren Bereich mit finalen Verifizierungen an
             with st.expander("🔧 DEBUG 6: Final Data Verification", expanded=True):
                 st.markdown("### ✅ Final Verification Checklist")
                 
@@ -1049,6 +1151,7 @@ if st.session_state.analysis_complete and st.session_state.results:
                 st.markdown("---")
                 st.markdown("### 📊 Complete Filter Pipeline Trace")
                 
+                # Erstellt eine Tabelle, die den Filterprozess nachzeichnet
                 pipeline_data = [
                     {"Step": "1. Raw File", "Rows": format_german_int(raw_rows), "Change": "—"},
                     {"Step": f"2. After Trockner ({applied_trockner})", "Rows": format_german_int(count_after_trockner), 
@@ -1062,6 +1165,7 @@ if st.session_state.analysis_complete and st.session_state.results:
                 ]
                 st.dataframe(pd.DataFrame(pipeline_data), hide_index=True, use_container_width=True)
                 
+                # Überprüft, ob die finale Anzahl mit dem letzten Schritt übereinstimmt
                 if len(wagons_df) == count_after_month:
                     st.success(f"✅ Final wagon count ({format_german_int(len(wagons_df))}) matches step 4 ({format_german_int(count_after_month)})")
                 else:
@@ -1070,6 +1174,7 @@ if st.session_state.analysis_complete and st.session_state.results:
                 st.markdown("---")
                 st.markdown("### 📋 Final wagons_df Sample (first 20 rows)")
                 
+                # Zeigt eine Beispiel-Tabelle der finalen Daten an
                 sample_cols = ["WG_Nr", "Produkt", "m3", "Month", "t0", "Trockner"]
                 available_cols = [c for c in sample_cols if c in wagons_df.columns]
                 
@@ -1084,6 +1189,7 @@ if st.session_state.analysis_complete and st.session_state.results:
                 st.markdown("---")
                 st.markdown("### 📦 Product Breakdown in Final Data")
                 
+                # Zeigt eine Aufschlüsselung der Daten nach Produkt an
                 product_breakdown = wagons_df.groupby("Produkt").agg({
                     "WG_Nr": "count",
                     "m3": ["sum", "mean"]
@@ -1092,7 +1198,7 @@ if st.session_state.analysis_complete and st.session_state.results:
                 product_breakdown = product_breakdown.reset_index()
                 product_breakdown = product_breakdown.sort_values("Total Volume (m³)", ascending=False)
                 
-                # Format for German display
+                # Formatieren für die deutsche Anzeige
                 pb_display = product_breakdown.copy()
                 pb_display["Row Count"] = pb_display["Row Count"].apply(format_german_int)
                 pb_display["Total Volume (m³)"] = pb_display["Total Volume (m³)"].apply(lambda x: format_german(x, 2))
@@ -1105,6 +1211,7 @@ if st.session_state.analysis_complete and st.session_state.results:
             # ============================================================
             #    ENERGY CALCULATION EXPLANATION (EXPANDABLE)
             # ============================================================
+            # Zeigt einen ausklappbaren Bereich mit der Erklärung der Energieberechnung an
             with st.expander("⚡ Energy Consumption Calculation - Detailed Explanation"):
                 st.markdown("### 📊 How is Energy Consumption Calculated?")
                 
@@ -1120,6 +1227,7 @@ if st.session_state.analysis_complete and st.session_state.results:
                 if "energy" in results and not results["energy"].empty:
                     energy_df = results["energy"]
                     
+                    # Berechnet die Gesamtenergie aus den Rohdaten
                     input_thermal_total = energy_df["E_thermal_total_kWh"].sum()
                     input_electrical_total = energy_df["E_el_kWh"].sum()
                     input_total_energy = input_thermal_total + input_electrical_total
@@ -1144,6 +1252,7 @@ if st.session_state.analysis_complete and st.session_state.results:
                     
                     st.markdown("**Source:** Energy Excel file (hourly measurements)")
                     
+                    # Zeigt ein Code-Beispiel für die Berechnung an
                     st.code(f"""
 Thermal Energy = Gas Consumption (m³) × 11,5 kWh/m³
 
@@ -1172,6 +1281,7 @@ Example for one hour:
                 if "allocation" in results and not results["allocation"].empty:
                     allocation_df = results["allocation"]
                     
+                    # Berechnet die zugewiesene Energie
                     allocated_thermal = allocation_df["Energy_thermal_kWh"].sum()
                     allocated_electrical = allocation_df["Energy_electrical_kWh"].sum()
                     allocated_total = allocation_df["Energy_share_kWh"].sum()
@@ -1179,6 +1289,7 @@ Example for one hour:
                     num_allocation_rows = len(allocation_df)
                     unique_wagons_allocated = allocation_df["Produkt"].nunique()
                     
+                    # Zeigt ein Code-Beispiel für die Zuweisung an
                     st.code(f"""
 Example: Hour 01.01.2024 10:00-11:00
 
@@ -1219,6 +1330,7 @@ This process repeats for each hour.
                 st.markdown("---")
                 st.markdown("### 📈 Step 3: Final KPI Calculation")
                 
+                # Zeigt ein Code-Beispiel für die finale KPI-Berechnung an
                 st.code(f"""
 Summary KPI Calculation:
 
@@ -1247,6 +1359,7 @@ electrical_pct = (total_electrical / total_energy) × 100
             # ============================================================
             #    DETAILED kWh/kg CALCULATION TRANSPARENCY
             # ============================================================
+            # Zeigt einen ausklappbaren Bereich mit der detaillierten kWh/kg-Berechnung an
             with st.expander("🔍 kWh/kg Water Calculation - Detailed Breakdown"):
                 st.markdown("### 📊 How kWh/kg is Calculated")
                 
@@ -1261,6 +1374,7 @@ electrical_pct = (total_electrical / total_energy) × 100
                 
                 st.markdown("---")
                 st.markdown("### 📦 Step 1: Volume from All Wagon Rows")
+                # Zeigt ein Code-Beispiel für die Volumenberechnung an
                 st.code(f"""
 Total Wagon Rows: {format_german_int(total_wagons)}
 Unique Wagon Numbers: {format_german_int(unique_wagon_numbers)}
@@ -1272,7 +1386,7 @@ Source: m³ column (AA) from Hordenwagen file
                 st.markdown("### 💧 Step 2: Water Calculation per Product")
                 water_df = pd.DataFrame(water_calc_details)
                 
-                # Format water_df for German display
+                # Formatieren von water_df für die deutsche Anzeige
                 water_df_display = water_df.copy()
                 water_df_display["Wagon Rows"] = water_df_display["Wagon Rows"].apply(format_german_int)
                 water_df_display["Volume (m³)"] = water_df_display["Volume (m³)"].apply(lambda x: format_german(x, 2))
@@ -1282,6 +1396,7 @@ Source: m³ column (AA) from Hordenwagen file
                 
                 st.dataframe(water_df_display, use_container_width=True, hide_index=True)
                 
+                # Zeigt ein Code-Beispiel für die Wasserberechnung an
                 st.code(f"""
 Total Water = Σ(Volume × Water/m³) for each product
             = {format_german_int(total_water)} kg
@@ -1289,6 +1404,7 @@ Total Water = Σ(Volume × Water/m³) for each product
                 """, language="text")
                 
                 st.markdown("### ⚡ Step 3: Energy Totals")
+                # Zeigt ein Code-Beispiel für die Energiewerte an
                 st.code(f"""
 Thermal Energy:    {format_german_int(total_thermal)} kWh
 Electrical Energy: {format_german_int(total_electrical)} kWh
@@ -1296,6 +1412,7 @@ Total Energy:      {format_german_int(total_energy)} kWh
                 """, language="text")
                 
                 st.markdown("### 📈 Step 4: Final KPI Calculation")
+                # Zeigt ein Code-Beispiel für die finale KPI-Berechnung an
                 st.code(f"""
 kWh/kg (Total) = Total Energy / Total Water
                = {format_german_int(total_energy)} / {format_german_int(total_water)}
@@ -1308,6 +1425,7 @@ kWh/kg (Thermal) = Thermal Energy / Total Water
                 
                 st.markdown("### 🔗 Cross-Check: kWh/m³ vs kWh/kg")
                 calculated_kwh_m3 = avg_kwh_per_kg * avg_water_per_m3
+                # Zeigt ein Code-Beispiel für die Kreuzprüfung an
                 st.code(f"""
 kWh/m³ should ≈ kWh/kg × Water/m³
 Calculated: {format_german(avg_kwh_per_kg, 4)} × {format_german(avg_water_per_m3, 1)} = {format_german(calculated_kwh_m3, 1)} kWh/m³
@@ -1318,6 +1436,7 @@ Difference: {format_german(abs(calculated_kwh_m3 - avg_kwh_per_m3), 1)} kWh/m³
             # ============================================================
             #    VOLUME BREAKDOWN & VALIDATION
             # ============================================================
+            # Zeigt einen ausklappbaren Bereich mit der Volumen-Aufschlüsselung an
             with st.expander("📊 Volume Breakdown & Wagon Count Validation"):
                 st.markdown("### 🚛 Wagon Count Methodology")
                 
@@ -1339,6 +1458,7 @@ Difference: {format_german(abs(calculated_kwh_m3 - avg_kwh_per_m3), 1)} kWh/m³
                 st.markdown("---")
                 st.markdown("### 📊 Summary Statistics")
                 
+                # Zeigt Metriken zur Zusammenfassung an
                 col_s1, col_s2, col_s3, col_s4 = st.columns(4)
                 
                 with col_s1:
@@ -1349,7 +1469,7 @@ Difference: {format_german(abs(calculated_kwh_m3 - avg_kwh_per_m3), 1)} kWh/m³
                     st.caption(f"Sum of m³ column (AA)")
                 with col_s3:
                     st.metric("Avg Volume/Row", f"{format_german(avg_volume_per_wagon, 4)} m³")
-                    st.caption("Mean of m³ column (AA)")
+                    st.caption(f"Mean of m³ column (AA)")
                 with col_s4:
                     unique_products = wagons_df["Produkt"].nunique()
                     st.metric("Unique Products", format_german_int(unique_products))
@@ -1357,11 +1477,11 @@ Difference: {format_german(abs(calculated_kwh_m3 - avg_kwh_per_m3), 1)} kWh/m³
                 st.markdown("---")
                 st.markdown("### 📦 Breakdown by Product (All Rows)")
                 
+                # Erstellt eine Aufschlüsselung nach Produkt
                 product_breakdown = wagons_df.groupby("Produkt").agg({
                     "WG_Nr": "count",
                     "m3": ["sum", "mean", "min", "max"]
                 }).round(4)
-                
                 product_breakdown.columns = ["Row Count", "Total Volume (m³)", "Avg Volume (m³)", "Min Volume (m³)", "Max Volume (m³)"]
                 product_breakdown = product_breakdown.reset_index()
                 product_breakdown = product_breakdown.sort_values("Total Volume (m³)", ascending=False)
@@ -1369,7 +1489,7 @@ Difference: {format_german(abs(calculated_kwh_m3 - avg_kwh_per_m3), 1)} kWh/m³
                 product_breakdown["% of Rows"] = (product_breakdown["Row Count"] / total_wagons * 100).round(1)
                 product_breakdown["% of Volume"] = (product_breakdown["Total Volume (m³)"] / total_volume * 100).round(1)
                 
-                # Format for German display
+                # Formatieren für die deutsche Anzeige
                 pb_display = product_breakdown.copy()
                 pb_display["Row Count"] = pb_display["Row Count"].apply(format_german_int)
                 pb_display["Total Volume (m³)"] = pb_display["Total Volume (m³)"].apply(lambda x: format_german(x, 2))
@@ -1388,6 +1508,7 @@ Difference: {format_german(abs(calculated_kwh_m3 - avg_kwh_per_m3), 1)} kWh/m³
                 st.markdown("---")
                 st.markdown("### 📅 Breakdown by Month (All Rows)")
                 
+                # Erstellt eine Aufschlüsselung nach Monat
                 monthly_breakdown = wagons_df.groupby("Month").agg({
                     "WG_Nr": "count",
                     "m3": ["sum", "mean"]
@@ -1395,7 +1516,7 @@ Difference: {format_german(abs(calculated_kwh_m3 - avg_kwh_per_m3), 1)} kWh/m³
                 monthly_breakdown.columns = ["Row Count", "Total Volume (m³)", "Avg Volume (m³)"]
                 monthly_breakdown = monthly_breakdown.reset_index()
                 
-                # Format for German display
+                # Formatieren für die deutsche Anzeige
                 mb_display = monthly_breakdown.copy()
                 mb_display["Row Count"] = mb_display["Row Count"].apply(format_german_int)
                 mb_display["Total Volume (m³)"] = mb_display["Total Volume (m³)"].apply(lambda x: format_german(x, 2))
@@ -1406,6 +1527,7 @@ Difference: {format_german(abs(calculated_kwh_m3 - avg_kwh_per_m3), 1)} kWh/m³
                 st.markdown("---")
                 st.markdown("### 🔍 Sample Wagon Data (First 20 rows)")
                 
+                # Zeigt eine Beispiel-Tabelle der finalen Daten an
                 sample_cols = ["WG_Nr", "Produkt", "m3", "Month", "t0", "Trockner"]
                 available_cols = [c for c in sample_cols if c in wagons_df.columns]
                 
@@ -1420,6 +1542,7 @@ Difference: {format_german(abs(calculated_kwh_m3 - avg_kwh_per_m3), 1)} kWh/m³
                 st.markdown("---")
                 st.markdown("### ✅ Validation")
                 
+                # Überprüft die Berechnungen
                 volume_from_breakdown = product_breakdown["Total Volume (m³)"].sum()
                 row_count_from_breakdown = int(product_breakdown["Row Count"].sum())
                 avg_from_mean = wagons_df["m3"].mean()
@@ -1447,6 +1570,7 @@ Difference: {format_german(abs(calculated_kwh_m3 - avg_kwh_per_m3), 1)} kWh/m³
                 st.markdown("---")
                 st.markdown("### 🔧 Debug Information")
                 
+                # Zeigt ein Code-Beispiel mit den Debug-Informationen an
                 st.code(f"""
 Wagon Count Calculation:
 - Total rows in wagons_df: {format_german_int(len(wagons_df))}
@@ -1466,8 +1590,10 @@ Verification:
                 """, language="text")
 
             # ===== 2. ZONE COMPARISON =====
+            # Zeigt eine Überschrift für den Abschnitt an
             st.markdown('<div class="section-header">📉 Zone Comparison</div>', unsafe_allow_html=True)
 
+            # Aggregiert die Daten nach Zone
             zone_totals = yearly.groupby("Zone", as_index=False).agg({
                 "Energy_thermal_kWh": "sum",
                 "Energy_electrical_kWh": "sum",
@@ -1481,6 +1607,7 @@ Verification:
                 0
             )
 
+            # Erstellt Diagramme zur Visualisierung des Energieverbrauchs pro Zone
             col_z1, col_z2 = st.columns(2)
 
             with col_z1:
@@ -1507,7 +1634,7 @@ Verification:
                     barmode='stack',
                     height=400,
                     plot_bgcolor="white",
-                    separators=",."  # German number format for Plotly
+                    separators=",."  # Deutsches Zahlenformat für Plotly
                 )
                 st.plotly_chart(fig_zone_energy, use_container_width=True)
 
@@ -1523,6 +1650,7 @@ Verification:
                 fig_pie.update_layout(height=400, separators=",.")
                 st.plotly_chart(fig_pie, use_container_width=True)
 
+            # Zeigt eine Tabelle mit der Zusammenfassung der Zonen an
             st.subheader("Zone Energy Summary")
             zone_display = zone_totals.copy()
             zone_display["Thermal %"] = (
@@ -1532,7 +1660,7 @@ Verification:
                 zone_display["Energy_electrical_kWh"] / zone_display["Energy_kWh"] * 100
             ).round(1)
             
-            # Format for German display
+            # Formatieren für die deutsche Anzeige
             zd_display = zone_display.copy()
             zd_display["Energy_thermal_kWh"] = zd_display["Energy_thermal_kWh"].apply(lambda x: format_german(x, 0))
             zd_display["Energy_electrical_kWh"] = zd_display["Energy_electrical_kWh"].apply(lambda x: format_german(x, 0))
@@ -1554,17 +1682,21 @@ Verification:
             st.dataframe(zd_display, use_container_width=True, hide_index=True)
 
             # ===== ZONE DURATION STATISTICS =====
+            # Zeigt eine Überschrift für den Abschnitt an
             st.markdown('<div class="section-header">⏱️ Time in Each Zone</div>', unsafe_allow_html=True)
             
+            # Lädt die Zonen-Statistiken aus den Ergebnissen
             zone_overall_stats = results.get("zone_overall_stats", pd.DataFrame())
             zone_product_stats = results.get("zone_product_stats", pd.DataFrame())
             
+            # Zeigt die Statistiken an, falls vorhanden
             if zone_overall_stats is not None and not zone_overall_stats.empty:
                 st.subheader("📊 Average Time in Each Zone")
                 
                 col_zd1, col_zd2 = st.columns(2)
                 
                 with col_zd1:
+                    # Balkendiagramm für die durchschnittliche Verweildauer pro Zone
                     fig_zone_dur = px.bar(
                         zone_overall_stats,
                         x="Zone",
@@ -1579,6 +1711,7 @@ Verification:
                     st.plotly_chart(fig_zone_dur, use_container_width=True)
                 
                 with col_zd2:
+                    # Tabelle mit den Statistiken
                     zone_dur_display = zone_overall_stats.copy()
                     zone_dur_display["Avg_Hours"] = zone_dur_display["Avg_Hours"].apply(lambda x: format_german(x, 2))
                     zone_dur_display["Min_Hours"] = zone_dur_display["Min_Hours"].apply(lambda x: format_german(x, 2))
@@ -1599,6 +1732,7 @@ Verification:
                     total_avg = zone_overall_stats["Avg_Hours"].sum()
                     st.metric("Total Avg Residence Time", f"{format_german(total_avg, 1)} hours ({format_german(total_avg/24, 1)} days)")
                 
+                # Zeigt eine detaillierte Ansicht pro Produkt und Zone an
                 if zone_product_stats is not None and not zone_product_stats.empty:
                     with st.expander("📦 Zone Duration by Product"):
                         pivot_zone_dur = zone_product_stats.pivot_table(
@@ -1610,13 +1744,14 @@ Verification:
                         
                         pivot_zone_dur["Total"] = pivot_zone_dur.sum(axis=1).round(2)
                         
-                        # Format for German display
+                        # Formatieren für die deutsche Anzeige
                         pivot_display = pivot_zone_dur.copy()
                         for col in pivot_display.columns:
                             pivot_display[col] = pivot_display[col].apply(lambda x: format_german(x, 2) if pd.notna(x) else "–")
                         
                         st.dataframe(pivot_display, use_container_width=True)
                         
+                        # Heatmap zur Visualisierung
                         fig_heatmap = px.imshow(
                             pivot_zone_dur.drop(columns=["Total"], errors="ignore"),
                             title="Average Zone Duration by Product (Hours)",
@@ -1630,6 +1765,7 @@ Verification:
                 st.info("⏱️ Zone duration data not available.")
 
             # ===== 3. MONTHLY & WEEKLY TRENDS =====
+            # Zeigt eine Überschrift für den Abschnitt an
             st.markdown(
                 '<div class="section-header">📊 Monthly & Weekly KPI Trends</div>',
                 unsafe_allow_html=True
@@ -1638,6 +1774,7 @@ Verification:
             # ===== TIMELINE FILTER =====
             st.subheader("📅 Timeline Filter")
             
+            # Ermittelt das Datum des ersten und letzten Eintrags
             if "t0" in wagons_df.columns:
                 min_date = wagons_df["t0"].min()
                 max_date = wagons_df["t0"].max()
@@ -1645,6 +1782,7 @@ Verification:
                 min_date = pd.Timestamp.now() - pd.Timedelta(days=365)
                 max_date = pd.Timestamp.now()
             
+            # Datumsauswahl für den Zeitfilter
             col_date1, col_date2 = st.columns(2)
             
             with col_date1:
@@ -1665,14 +1803,17 @@ Verification:
                     key="trend_end_date"
                 )
             
+            # Wandelt die ausgewählten Daten in datetime-Objekte um
             start_datetime = pd.to_datetime(start_date)
             end_datetime = pd.to_datetime(end_date) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
             
+            # Filtert die Daten basierend auf dem ausgewählten Zeitraum
             date_mask = (wagons_df["t0"] >= start_datetime) & (wagons_df["t0"] <= end_datetime)
             wagons_date_filtered = wagons_df[date_mask].copy()
             
             months_in_range = wagons_date_filtered["Month"].unique().tolist() if not wagons_date_filtered.empty else []
             
+            # Filtert die Zusammenfassungsdaten basierend auf dem Zeitraum
             summary_date_filtered = summary[summary["Month"].isin(months_in_range)].copy()
             
             days_selected = (end_datetime - start_datetime).days + 1
@@ -1680,6 +1821,7 @@ Verification:
                    f"**Wagons:** {format_german_int(len(wagons_date_filtered))} | "
                    f"**Volume:** {format_german(wagons_date_filtered['m3'].sum(), 2)} m³")
 
+            # Produktfilter für die Trendansicht
             available_products = sorted(summary_date_filtered["Produkt"].unique().tolist())
             
             if not available_products:
@@ -1714,7 +1856,7 @@ Verification:
                     else:
                         st.info(f"📊 Showing **{len(selected_products_trends)}** product(s)")
 
-                        # Monthly by Product
+                        # Berechnet die monatlichen Daten pro Produkt
                         monthly_product = summary_filtered.groupby(["Month", "Produkt"], as_index=False).agg({
                             "Energy_thermal_kWh": "sum",
                             "Energy_electrical_kWh": "sum",
@@ -1733,7 +1875,7 @@ Verification:
                         )
                         monthly_product["kWh_thermal_per_m3"] = monthly_product["Energy_thermal_kWh"] / monthly_product["Volume_m3"]
 
-                        # Monthly by Zone
+                        # Berechnet die monatlichen Daten pro Zone
                         monthly_zone = summary_filtered.groupby(["Month", "Zone"], as_index=False).agg({
                             "Energy_thermal_kWh": "sum",
                             "Energy_electrical_kWh": "sum",
@@ -1751,7 +1893,7 @@ Verification:
                             0
                         )
 
-                        # Monthly Overall
+                        # Berechnet die monatlichen Gesamtdaten
                         monthly_overall = summary_filtered.groupby(["Month"], as_index=False).agg({
                             "Energy_thermal_kWh": "sum",
                             "Energy_electrical_kWh": "sum",
@@ -1771,11 +1913,12 @@ Verification:
                             0
                         )
 
-                        # Weekly data
+                        # Berechnet die wöchentlichen Daten
                         weekly_energy = None
                         if "energy" in results and not results["energy"].empty:
                             energy_df = results["energy"].copy()
                             
+                            # Filtert die Energiestammdaten basierend auf dem Zeitraum
                             if "E_start" in energy_df.columns:
                                 energy_df = energy_df[
                                     (energy_df["E_start"] >= start_datetime) & 
@@ -1783,6 +1926,7 @@ Verification:
                                 ]
                             
                             if not energy_df.empty:
+                                # Gruppiert die Daten nach Woche und Jahr
                                 energy_df["Week"] = energy_df["E_start"].dt.isocalendar().week
                                 energy_df["Year"] = energy_df["E_start"].dt.year
 
@@ -1800,12 +1944,14 @@ Verification:
                         # Overall Trends
                         st.subheader("📈 Overall Performance Trends")
                         
+                        # Berechnet die Gesamt-KPIs für den ausgewählten Zeitraum
                         filtered_thermal = monthly_overall["Energy_thermal_kWh"].sum()
                         filtered_electrical = monthly_overall["Energy_electrical_kWh"].sum()
                         filtered_energy = monthly_overall["Energy_kWh"].sum()
                         filtered_volume = monthly_overall["Volume_m3"].sum()
                         filtered_water = monthly_overall["Water_kg"].sum()
                         
+                        # Zeigt Metriken für den ausgewählten Zeitraum an
                         col_m1, col_m2, col_m3, col_m4 = st.columns(4)
                         with col_m1:
                             st.metric("Total Energy", f"{format_german_int(filtered_energy)} kWh")
@@ -1817,7 +1963,7 @@ Verification:
                             filtered_kwh_kg = filtered_energy / filtered_water if filtered_water > 0 else 0
                             st.metric("kWh/kg", format_german(filtered_kwh_kg, 3))
 
-                        # Monthly Charts
+                        # Erstellt monatliche Diagramme
                         col_o1, col_o2 = st.columns(2)
 
                         with col_o1:
@@ -1865,6 +2011,7 @@ Verification:
                         # Weekly Trends
                         st.subheader("📅 Weekly Energy Trends (Based on Zone 2 Entry)")
                         
+                        # Zeigt wöchentliche Diagramme an, falls Daten vorhanden
                         if weekly_energy is not None and not weekly_energy.empty:
                             col_w1, col_w2 = st.columns(2)
 
@@ -1911,6 +2058,7 @@ Verification:
                                 )
                                 st.plotly_chart(fig_weekly_trend, use_container_width=True)
 
+                            # Zeigt Statistiken zu den wöchentlichen Daten an
                             avg_weekly = weekly_energy["Total_kWh"].mean()
                             max_weekly = weekly_energy["Total_kWh"].max()
                             st.info(f"📊 **Weekly Stats:** Avg = **{format_german_int(avg_weekly)} kWh/week** | Peak = **{format_german_int(max_weekly)} kWh**")
@@ -1945,6 +2093,7 @@ Verification:
                             st.plotly_chart(fig_monthly_kwh_kg, use_container_width=True)
 
                         # Trends by Product
+                        # Zeigt detaillierte Trends pro Produkt in einem ausklappbaren Bereich an
                         with st.expander("🧱 Trends by Product - Detailed Charts"):
                             if monthly_product.empty:
                                 st.warning("No product data available.")
@@ -2004,6 +2153,7 @@ Verification:
                                     st.plotly_chart(fig_prod_volume, use_container_width=True)
 
                         # Trends by Zone
+                        # Zeigt detaillierte Trends pro Zone in einem ausklappbaren Bereich an
                         with st.expander("🏭 Trends by Zone - Detailed Charts"):
                             if monthly_zone.empty:
                                 st.warning("No zone data available.")
@@ -2061,25 +2211,27 @@ Verification:
                                     st.plotly_chart(fig_zone_volume, use_container_width=True)
             
             # ===== 4. SINGLE PRODUCT DEEP DIVE =====
-            # ===== 4. SINGLE PRODUCT DEEP DIVE =====
+            # Zeigt eine Überschrift für den Abschnitt an
             st.markdown(
                 '<div class="section-header">🔬 Single Product Deep Dive</div>',
                 unsafe_allow_html=True
             )
             
+            # Dropdown zur Auswahl eines einzelnen Produkts
             selected_single_product = st.selectbox(
                 "Select a product for detailed analysis:",
                 options=sorted(summary["Produkt"].unique().tolist()),
                 key="single_product_select"
             )
             
+            # Zeigt die Detailansicht für das ausgewählte Produkt an
             if selected_single_product:
                 single_product_data = summary[summary["Produkt"] == selected_single_product]
                 
                 if single_product_data.empty:
                     st.warning(f"No data available for {selected_single_product}")
                 else:
-                    # Calculate totals directly from single_product_data
+                    # Berechnet die Gesamt-KPIs für das ausgewählte Produkt
                     total_energy_prod = single_product_data["Energy_kWh"].sum()
                     total_thermal_prod = single_product_data["Energy_thermal_kWh"].sum()
                     total_electrical_prod = single_product_data["Energy_electrical_kWh"].sum()
@@ -2091,6 +2243,7 @@ Verification:
                     
                     st.subheader(f"📊 {selected_single_product} - Summary")
                     
+                    # Zeigt Metriken für das ausgewählte Produkt an
                     col_s1, col_s2, col_s3, col_s4, col_s5 = st.columns(5)
                     with col_s1:
                         st.metric("Total Energy", f"{format_german_int(total_energy_prod)} kWh")
@@ -2103,7 +2256,7 @@ Verification:
                     with col_s5:
                         st.metric("kWh/kg", format_german(avg_kwh_kg_prod, 3))
                     
-                    # Product specifications (if available)
+                    # Zeigt die Produktspezifikationen an, falls vorhanden
                     if selected_single_product in PRODUCT_SPECIFICATIONS:
                         spec = PRODUCT_SPECIFICATIONS[selected_single_product]
                         st.subheader(f"📐 {selected_single_product} - Specifications")
@@ -2134,12 +2287,14 @@ Verification:
                             st.write(f"- Product Type: {spec['product_type']}")
 
             # ===== 5. PRODUCT PERFORMANCE =====
+            # Zeigt eine Überschrift für den Abschnitt an
             if product_totals is not None and not product_totals.empty:
                 st.markdown(
                     '<div class="section-header">📊 Product Performance</div>',
                     unsafe_allow_html=True
                 )
 
+                # Aggregiert die Daten nach Produkt
                 prod_agg = product_totals.groupby("Produkt", as_index=False).agg({
                     "Energy_thermal_kWh": "sum",
                     "Energy_electrical_kWh": "sum",
@@ -2148,6 +2303,7 @@ Verification:
                     "Water_kg": "sum",
                 })
 
+                # Berechnet die KPIs pro Produkt
                 prod_agg["kWh_per_m3"] = np.where(
                     prod_agg["Volume_m3"] > 0,
                     prod_agg["Energy_kWh"] / prod_agg["Volume_m3"],
@@ -2165,6 +2321,7 @@ Verification:
                 )
                 prod_agg = prod_agg.fillna(0)
 
+                # Erstellt Diagramme zur Produktleistung
                 col_p1, col_p2 = st.columns(2)
 
                 with col_p1:
@@ -2223,10 +2380,11 @@ Verification:
                     )
                     st.plotly_chart(fig_thermal, use_container_width=True)
 
+                # Zeigt eine Tabelle mit der Produktleistung an
                 st.subheader("Product Energy Summary")
                 prod_display = prod_agg.copy()
                 
-                # Format for German display
+                # Formatieren für die deutsche Anzeige
                 prod_display["Energy_thermal_kWh"] = prod_display["Energy_thermal_kWh"].apply(lambda x: format_german(x, 0))
                 prod_display["Energy_electrical_kWh"] = prod_display["Energy_electrical_kWh"].apply(lambda x: format_german(x, 0))
                 prod_display["Energy_kWh"] = prod_display["Energy_kWh"].apply(lambda x: format_german(x, 0))
@@ -2255,13 +2413,16 @@ Verification:
                 st.dataframe(prod_display[display_cols], use_container_width=True, hide_index=True)
 
             # ===== 6. PRODUCT SPECIFICATIONS =====
+            # Zeigt eine Überschrift für den Abschnitt an
             st.markdown(
                 '<div class="section-header">📐 Product Specifications</div>',
                 unsafe_allow_html=True
             )
 
+            # Zeigt die Formel zur Berechnung des Wassergehalts an
             st.write(f"**Formula:** Water/mm (g) = Slope × Suspension ({format_german_int(SUSPENSION_KG)} kg) + Intercept")
 
+            # Erstellt eine Tabelle mit allen Produktspezifikationen
             specs_data = []
             for prod, spec in PRODUCT_SPECIFICATIONS.items():
                 slope = spec["slope"]
@@ -2291,6 +2452,7 @@ Verification:
             st.info("⚠️ Products marked with ⚠️ are interpolated values")
 
             # ===== 7. DATA TABLES =====
+            # Zeigt die Detaildaten in einem ausklappbaren Bereich an
             with st.expander("📋 View Detailed Data Tables"):
                 tab1, tab2, tab3 = st.tabs(["Monthly Summary", "Yearly Summary", "Product Totals"])
                 with tab1:
@@ -2302,22 +2464,27 @@ Verification:
                         st.dataframe(product_totals, use_container_width=True)
 
             # ===== 8. WEEKLY PREDICTION =====
+            # Zeigt eine Überschrift für den Abschnitt an
             st.markdown(
                 '<div class="section-header">🔮 Weekly Energy Prediction</div>',
                 unsafe_allow_html=True
             )
 
+            # Berechnet die Wagenkapazitäten pro Produkt
             wagon_stats = compute_product_wagon_stats(wagons_df)
             wagon_capacity = wagon_stats.get("wagon_capacity_m3", {})
 
+            # Berechnet die durchschnittlichen KPIs als Basis für die Vorhersage
             baseline_kwh_m3 = float(yearly["kWh_per_m3"].mean()) if len(yearly) > 0 else 0.0
             baseline_kwh_kg = float(yearly["kWh_per_kg"].mean()) if len(yearly) > 0 else 0.0
 
+            # Zeigt die Basis-KPIs an
             st.info(
                 f"📈 **Historical Baseline KPIs:** "
                 f"**{format_german(baseline_kwh_kg, 3)} kWh/kg** | **{format_german(baseline_kwh_m3, 1)} kWh/m³**"
             )
 
+            # Ermöglicht die Anpassung der KPIs für die Vorhersage
             use_custom_kpis = st.checkbox("🔧 Use custom KPIs", value=False)
 
             if use_custom_kpis:
@@ -2330,6 +2497,7 @@ Verification:
                 prediction_kwh_m3 = baseline_kwh_m3
                 prediction_kwh_kg = baseline_kwh_kg
 
+            # Formular für die Eingabe der geplanten Produktion
             with st.form("weekly_prediction_form"):
                 st.write("### 📅 Planned Production per Week")
                 planned_wagons = {}
@@ -2365,10 +2533,12 @@ Verification:
 
                 submitted = st.form_submit_button("🔮 Calculate Prediction", type="primary")
 
+            # Führt die Vorhersage durch, wenn das Formular abgeschickt wurde
             if submitted:
                 product_volumes = {}
                 total_wagons_pred = 0
 
+                # Berechnet das Volumen für jedes geplante Produkt
                 for prod, wagons in planned_wagons.items():
                     if wagons > 0:
                         capacity = wagon_capacity.get(prod, 1.5) or 1.5
@@ -2376,6 +2546,7 @@ Verification:
                         total_wagons_pred += wagons
 
                 if product_volumes:
+                    # Führt die Vorhersage durch
                     pred = predict_production_energy(
                         product_volumes_m3=product_volumes,
                         baseline_kwh_per_m3=prediction_kwh_m3,
@@ -2386,6 +2557,7 @@ Verification:
                     st.markdown("---")
                     st.subheader("📊 Weekly Forecast")
 
+                    # Zeigt die vorhergesagten Gesamtwerte an
                     c1, c2, c3, c4 = st.columns(4)
                     with c1:
                         st.metric("Total Wagons", format_german_int(total_wagons_pred))
@@ -2398,11 +2570,12 @@ Verification:
                             energy = pred["total_energy_kwh"]
                             st.metric("Energy Required", f"{format_german_int(energy)} kWh")
 
+                    # Zeigt die Aufschlüsselung nach Produkt an
                     if pred.get("products"):
                         st.write("### 📦 Product Breakdown")
                         breakdown = pd.DataFrame(pred["products"])
                         
-                        # Format for German display
+                        # Formatieren für die deutsche Anzeige
                         if "volume_m3" in breakdown.columns:
                             breakdown["volume_m3"] = breakdown["volume_m3"].apply(lambda x: format_german(x, 2))
                         if "water_per_plate_kg" in breakdown.columns:
@@ -2429,11 +2602,13 @@ Verification:
                     st.warning("⚠️ Enter wagon counts for at least one product.")
 
             # ===== 9. EXPORT =====
+            # Zeigt eine Überschrift für den Abschnitt an
             st.markdown(
                 '<div class="section-header">📥 Export Results</div>',
                 unsafe_allow_html=True
             )
 
+            # Erstellt einen Download-Button für die Excel-Datei
             excel_data = create_excel_download(results)
             st.download_button(
                 label="📥 Download Complete Excel Report",
@@ -2442,19 +2617,11 @@ Verification:
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
 
+            # Zeigt eine Erfolgsmeldung an
             st.success("✅ Analysis complete!")
 
     except Exception as e:
+        # Fängt Fehler bei der Anzeige der Ergebnisse ab
         st.error(f"❌ Display error: {e}")
         with st.expander("🔍 View Error Details"):
             st.exception(e)
-
-
-
-
-
-
-
-
-
-
