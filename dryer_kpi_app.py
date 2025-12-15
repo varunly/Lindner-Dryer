@@ -2066,31 +2066,31 @@ Verification:
                             st.info("📅 No weekly energy data for the selected period")
 
                         # Monthly KPI Charts
-                        col_o3, col_o4 = st.columns(2)
-                        
-                        with col_o3:
-                            fig_monthly_kwh_m3 = px.line(
-                                monthly_overall,
-                                x="Month",
-                                y="kWh_per_m3",
-                                markers=True,
-                                title="Monthly kWh/m³ Trend"
-                            )
-                            fig_monthly_kwh_m3.update_traces(line_color='#667eea', line_width=3)
-                            fig_monthly_kwh_m3.update_layout(height=300, plot_bgcolor="white", separators=",.")
-                            st.plotly_chart(fig_monthly_kwh_m3, use_container_width=True)
+                     #   col_o3, col_o4 = st.columns(2)
+                      #  
+                       # with col_o3:
+                        #    fig_monthly_kwh_m3 = px.line(
+                         #       monthly_overall,
+                          #      x="Month",
+                           #     y="kWh_per_m3",
+                            #    markers=True,
+                             #   title="Monthly kWh/m³ Trend"
+                            #)
+                            #fig_monthly_kwh_m3.update_traces(line_color='#667eea', line_width=3)
+                            #fig_monthly_kwh_m3.update_layout(height=300, plot_bgcolor="white", separators=",.")
+                            #st.plotly_chart(fig_monthly_kwh_m3, use_container_width=True)
 
-                        with col_o4:
-                            fig_monthly_kwh_kg = px.line(
-                                monthly_overall,
-                                x="Month",
-                                y="kWh_per_kg",
-                                markers=True,
-                                title="Monthly kWh/kg Trend"
-                            )
-                            fig_monthly_kwh_kg.update_traces(line_color='#f093fb', line_width=3)
-                            fig_monthly_kwh_kg.update_layout(height=300, plot_bgcolor="white", separators=",.")
-                            st.plotly_chart(fig_monthly_kwh_kg, use_container_width=True)
+                        #with col_o4:
+                         #   fig_monthly_kwh_kg = px.line(
+                          #      monthly_overall,
+                           #     x="Month",
+                            #    y="kWh_per_kg",
+                           #     markers=True,
+                             #   title="Monthly kWh/kg Trend"
+                            #)
+                         #   fig_monthly_kwh_kg.update_traces(line_color='#f093fb', line_width=3)
+                          #  fig_monthly_kwh_kg.update_layout(height=300, plot_bgcolor="white", separators=",.")
+                           # st.plotly_chart(fig_monthly_kwh_kg, use_container_width=True)
 
                         # Trends by Product
                         # Zeigt detaillierte Trends pro Produkt in einem ausklappbaren Bereich an
@@ -2625,4 +2625,5 @@ Verification:
         st.error(f"❌ Display error: {e}")
         with st.expander("🔍 View Error Details"):
             st.exception(e)
+
 
